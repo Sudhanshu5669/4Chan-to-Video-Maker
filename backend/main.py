@@ -106,7 +106,7 @@ def run_automation():
     print(f"\n[ /{target_board}/ selected ]\n")
     print("  [1]  Manual   – browse catalog yourself")
     print("  [2]  Auto     – AI picks the best thread & renders immediately")
-    print("  [3]  Review   – AI scouts, you approve each step\n")
+    print("  [3]  Review   – AI scouts, you approve and edit the final script\n")
     mode = input("Choice (1/2/3): ").strip()
 
     thread_id      = None
@@ -172,27 +172,56 @@ def run_automation():
             print("  ✗ LLM editor failed – aborting.")
             return
 
-        # ── 6. REPLY REVIEW (mode 3 only) ────
+        # ── 6. SCRIPT EDITOR INTERFACE ───────
         playlist = [{"id": thread_id, "text": llm_result["op_censored"]}]
-        reply_mode = "1"
+        for rep in llm_result.get("selected_replies", []):
+            playlist.append({"id": rep["id"], "text": rep["censored_text"]})
 
         if mode == "3":
-            print("\n  ✂️   Script ready. Reply handling:")
-            print("  [1] Auto   – include all selected replies")
-            print("  [2] Review – approve each reply individually")
-            reply_mode = input("  Choice (1/2): ").strip()
-
-        if reply_mode == "2":
-            print(f"\n  OP [auto-included]: {llm_result['op_censored']}\n")
-            for rep in llm_result.get("selected_replies", []):
-                print(f"  → Reply {rep['id']}: {rep['censored_text']}")
-                if input("    Include? (y/n): ").strip().lower() == "y":
-                    playlist.append({"id": rep["id"], "text": rep["censored_text"]})
+            while True:
+                print("\n==========================================")
+                print("  📝  CURRENT SCRIPT PREVIEW")
+                print("==========================================")
+                for i, item in enumerate(playlist):
+                    label = "OP" if i == 0 else f"Reply {item['id']}"
+                    print(f"  [{i}] {label}:\n      {item['text']}\n")
+                
+                print("  [c] Continue & Render Video")
+                print("  [d] Delete a reply (by index)")
+                print("  [a] Add a reply manually (by Post ID)")
+                
+                action = input("\n  Action (c/d/a): ").strip().lower()
+                
+                if action == 'c':
+                    break
+                elif action == 'd':
+                    idx_str = input("  Enter the [Index Number] to delete: ").strip()
+                    if idx_str.isdigit():
+                        idx = int(idx_str)
+                        if 0 < idx < len(playlist):
+                            removed = playlist.pop(idx)
+                            print(f"  🗑️  Removed Reply {removed['id']}")
+                        elif idx == 0:
+                            print("  ⚠️  You shouldn't delete the OP!")
+                        else:
+                            print("  ⚠️  Invalid index.")
+                elif action == 'a':
+                    new_id_str = input("  Enter the 4chan Post ID to add: ").strip()
+                    if new_id_str.isdigit():
+                        new_id = int(new_id_str)
+                        # Search the fetched raw data for this ID
+                        found_reply = next((r for r in replies_data if r["id"] == new_id), None)
+                        if found_reply:
+                            print(f"\n  Found text:\n  {found_reply['text']}\n")
+                            # Allow you to manually censor/edit it before adding
+                            custom_text = input("  Edit/Censor this text (or press Enter to use as-is): ").strip()
+                            final_text = custom_text if custom_text else found_reply['text']
+                            playlist.append({"id": new_id, "text": final_text})
+                            print(f"  ➕  Added Reply {new_id}")
+                        else:
+                            print("  ⚠️  ID not found. It might be an image-only post or wasn't in the top 25 replies.")
                 else:
-                    print("    [discarded]")
-        else:
-            for rep in llm_result.get("selected_replies", []):
-                playlist.append({"id": rep["id"], "text": rep["censored_text"]})
+                    print("  Invalid action.")
 
         print(f"\n  🎬  {len(playlist)} scenes queued.\n")
 
@@ -202,7 +231,6 @@ def run_automation():
             for i, post in enumerate(playlist)
         ]
 
-        # Results keyed by index to preserve order
         results = {}
         with ThreadPoolExecutor(max_workers=min(4, len(playlist))) as pool:
             futures = {pool.submit(generate_scene, a): a[0] for a in args_list}
@@ -239,7 +267,6 @@ def run_automation():
         upload_choice = input("  Upload? (y/n): ").strip().lower()
         
         if upload_choice == 'y':
-            # Generate default "dank" fallbacks
             default_title = f"4chan /{target_board}/ is actually unhinged 💀"
             default_desc = f"They really said that... \n\n#4chan #greentext #{target_board} #redditstories #shorts"
             video_tags = ["4chan", "greentext", "reddit stories", "shorts", "tiktok"]
@@ -253,20 +280,18 @@ def run_automation():
             custom_desc = input("  Enter custom description (or press Enter to use default): ").strip()
             video_desc = custom_desc if custom_desc else default_desc
             
-            # Execute the upload (passing `out` which is the rendered video path)
             upload_to_youtube(
                 video_path=out,
                 title=video_title,
                 description=video_desc,
                 tags=video_tags,
-                privacy="public" # Change to "public" when you are ready to go live
+                privacy="public" 
             )
 
     except Exception as e:
         import traceback
         print(f"\n  ✗ FAILED: {e}")
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     run_automation()

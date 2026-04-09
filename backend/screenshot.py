@@ -1,8 +1,5 @@
 from playwright.sync_api import sync_playwright
 
-
-# ── Injected CSS: clean card design with high-contrast, readable text ─────────
-# Text colors have been lightened to near-white for excellent readability
 # ── Injected CSS: clean card design with high-contrast, readable text ─────────
 CARD_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -42,16 +39,15 @@ body {
     border-radius: 16px 16px 0 0;
 }
 
-/* --- THE FIX: STRIP 4CHAN'S NATIVE REPLY STYLING --- */
+/* --- STRIP 4CHAN'S NATIVE REPLY STYLING --- */
 .highlight-card .post {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     margin: 0 !important;
     padding: 0 !important;
-    display: block !important; /* Overrides 4chan's native display: table for replies */
+    display: block !important; 
 }
-/* --------------------------------------------------- */
 
 .highlight-card .postInfo {
     display: flex !important;
@@ -66,13 +62,29 @@ body {
 .highlight-card .nameBlock { color: #fff !important; }
 .highlight-card .dateTime  { color: #ddd !important; font-size: 12px !important; }
 
-/* Hide stuff we don't need inside the card */
-.highlight-card .fileThumb,
+/* Hide file info text (e.g., 'image.jpg 50KB'), but KEEP the actual image */
 .highlight-card .fileInfo,
 .highlight-card .postMenu,
 .highlight-card .backlink,
 .highlight-card .mobilePostControls,
 .highlight-card a.quotelink { display: none !important; }
+
+/* --- NEW: Style the Image for Modern Cards --- */
+.highlight-card .file {
+    display: block !important;
+    margin: 15px 18px 0 18px !important;
+}
+.highlight-card .fileThumb {
+    display: block !important;
+    float: none !important; /* Stops the text from wrapping around the image */
+    text-align: center !important;
+    margin: 0 auto !important;
+}
+.highlight-card .fileThumb img {
+    max-width: 100% !important;
+    height: auto !important;
+    border-radius: 8px !important; /* Nice rounded corners for the meme */
+}
 
 /* The actual post text */
 .highlight-card .postMessage,
@@ -90,7 +102,6 @@ body {
 .highlight-card .quote { color: #8fef8f !important; }
 """
 
-
 def capture_post(board: str, thread_id: int, post_id: int,
                  output_path: str, replacement_text: str | None = None):
     """
@@ -107,11 +118,11 @@ def capture_post(board: str, thread_id: int, post_id: int,
         )
         page = context.new_page()
 
-        # Block images/media to load faster – we only need the text
-        page.route("**/*.{png,jpg,jpeg,gif,webp,svg,mp4,webm}", lambda r: r.abort())
+        # We ONLY block ads now. Images are allowed to load!
         page.route("**/ads/**", lambda r: r.abort())
 
-        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        # Changed to "load" to ensure images finish downloading before screenshotting
+        page.goto(url, wait_until="load", timeout=30_000)
         page.add_style_tag(content=CARD_CSS)
 
         selector = f"#pc{post_id}"
@@ -121,7 +132,7 @@ def capture_post(board: str, thread_id: int, post_id: int,
             const el = document.querySelector('{selector}');
             if (el) {{
                 el.classList.add('highlight-card');
-                // Force the card itself visible (overrides any display:none from page or our CSS)
+                // Force the card itself visible
                 el.style.cssText += '; display:block !important; visibility:visible !important; opacity:1 !important;';
                 // Hide everything else
                 document.querySelectorAll('.postContainer').forEach(p => {{
@@ -144,8 +155,8 @@ def capture_post(board: str, thread_id: int, post_id: int,
                 if (msg) msg.innerHTML = '{safe}';
             """)
 
-        # Let the layout settle after our DOM surgery
-        page.wait_for_timeout(500)
+        # Let the layout settle after our DOM surgery and image loading
+        page.wait_for_timeout(800)
 
         # Get bounding box via JS — bypasses all playwright visibility checks
         bbox = page.evaluate("""
@@ -168,7 +179,7 @@ def capture_post(board: str, thread_id: int, post_id: int,
             "height": max(200, int(bbox["y"] + bbox["height"]) + 20),
         })
 
-        # page.screenshot(clip=...) captures raw pixels — no visibility requirement
+        # page.screenshot(clip=...) captures raw pixels
         page.screenshot(
             path=output_path,
             clip={
