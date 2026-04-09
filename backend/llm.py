@@ -2,66 +2,79 @@ import ollama
 import json
 import re
 
-def curate_and_censor_thread(op_text, replies_data, model="blaifa/InternVL3_5:8b"):
+def scout_best_thread(threads_data, model="blaifa/InternVL3_5:8b"):
     """
-    Feeds the OP and ALL top replies to Ollama, asking it to act as an autonomous editor.
+    Acts as a scout. Reads a list of thread previews and picks the most entertaining one.
+    Returns the thread ID, or None if they are all boring.
     """
     
-    # Construct a numbered list of replies for the LLM to read
+    context = ""
+    for t in threads_data:
+        context += f"Thread ID: {t['id']} | Replies: {t['replies']}\nText: {t['text']}\n{'-'*30}\n"
+        
+    prompt = f"""
+    You are a viral content scout for a YouTube channel. 
+    Review these 4chan thread previews:
+    
+    {context}
+    
+    Your task:
+    Select the ONE thread that would make the most entertaining, funny, or interesting video. 
+    Look for engaging stories, funny questions, or high reply counts. 
+    DO NOT select heavily political, racist, or illegal threads.
+    
+    If NONE of these threads are good enough to make a video, return null for the ID.
+    
+    You MUST respond ONLY in valid JSON format.
+    Example if you find a good thread:
+    {{ "selected_thread_id": 12345678, "reason": "This story about a bad date is hilarious." }}
+    
+    Example if they are all bad:
+    {{ "selected_thread_id": null, "reason": "All of these are boring or overly offensive." }}
+    """
+    
+    print("[LLM Scout] Scanning page for viral content...")
+    response = ollama.chat(model=model, messages=[{'role': 'user', 'content': prompt}], format='json')
+    
+    raw_response = response['message']['content']
+    raw_response = re.sub(r'```json\n?', '', raw_response)
+    raw_response = re.sub(r'```\n?', '', raw_response)
+    
+    try:
+        data = json.loads(raw_response.strip())
+        return data.get("selected_thread_id"), data.get("reason")
+    except json.JSONDecodeError:
+        return None, "LLM failed to format output."
+
+def curate_and_censor_thread(op_text, replies_data, model="blaifa/InternVL3_5:8b"):
+    """Your existing Editor function."""
     replies_context = "\n".join([f"ID {r['id']}: {r['text']}" for r in replies_data])
     
     prompt = f"""
     You are an expert content director for a viral YouTube Shorts channel. 
-    Here is the Original Post (OP) of a 4chan thread:
-    "{op_text}"
-    
-    Here are the replies to that thread:
+    Here is the OP: "{op_text}"
+    Here are the replies:
     {replies_context}
     
-    Your exact tasks:
-    1. AUTONOMOUSLY SELECT the best replies to feature in the video. You must pick between 1 and 5 replies (MAXIMUM 5).
-    2. Choose replies that make the thread entertaining, highly relevant, and build a fun or engaging narrative as the video goes on.
-    3. DO NOT select any replies that are hateful, racist, or promote illegal acts.
-    4. CENSOR any profanity, slurs, or heavily flagged words (e.g., f***, s***, b****) using asterisks to ensure the video is safe for YouTube monetization. Do this for both the OP text and the selected replies.
+    1. Select 1 to 5 best replies to feature.
+    2. Choose replies that are entertaining and build a narrative.
+    3. CENSOR profanity and slurs using asterisks (e.g., f***).
     
-    You MUST respond ONLY in valid JSON format. Do not include markdown formatting (like ```json), conversational text, or explanations. Just output the raw JSON object.
-    
-    The JSON must be an object with two keys: "op_censored" (string) and "selected_replies" (array of objects).
-    Each object in the array must have "id" (integer) and "censored_text" (string).
-    
-    Example output format:
-    {{
-        "op_censored": "This is a clean post about my day.",
-        "selected_replies": [
-            {{"id": 12345, "censored_text": "That is a crazy story, what the h***!"}},
-            {{"id": 12346, "censored_text": "Bro you really messed up this time."}}
-        ]
-    }}
+    Respond ONLY in valid JSON:
+    {{ "op_censored": "Clean text", "selected_replies": [ {{"id": 123, "censored_text": "clean reply"}} ] }}
     """
     
-    print("\n[LLM] Analyzing thread and building the script... (This might take a moment)")
-    
-    response = ollama.chat(
-        model=model,
-        messages=[{'role': 'user', 'content': prompt}],
-        format='json' 
-    )
+    print("\n[LLM Editor] Building script and censoring bad words...")
+    response = ollama.chat(model=model, messages=[{'role': 'user', 'content': prompt}], format='json')
     
     raw_response = response['message']['content']
-    
-    # Strip markdown code blocks if the LLM stubbornly includes them
     raw_response = re.sub(r'```json\n?', '', raw_response)
     raw_response = re.sub(r'```\n?', '', raw_response)
     
     try:
         curated_data = json.loads(raw_response.strip())
-        
-        # Failsafe: Ensure it didn't grab more than 5 replies
         if len(curated_data.get("selected_replies", [])) > 5:
             curated_data["selected_replies"] = curated_data["selected_replies"][:5]
-            
         return curated_data
     except json.JSONDecodeError:
-        print("Error: The LLM failed to output valid JSON.")
-        print("Raw Output:", raw_response)
         return None
