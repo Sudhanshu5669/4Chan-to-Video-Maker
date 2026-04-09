@@ -1,6 +1,3 @@
-Here is a comprehensive, visually appealing, and human-written `README.md` for your repository. You can copy and paste this directly into your GitHub repo.
-
-***
 
 # 🎬 Auto-Chan: Autonomous 4chan Video Producer
 
