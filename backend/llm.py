@@ -8,68 +8,116 @@ def scout_best_thread(threads_data, model="blaifa/InternVL3_5:8b"):
         context += f"Thread ID: {t['id']} | Replies: {t['replies']}\nText: {t['text']}\n{'-'*30}\n"
         
     prompt = f"""
-You are a senior viral content strategist for a YouTube channel that turns internet threads into highly engaging story videos.
+You are an ELITE viral content strategist for a YouTube Shorts channel.
 
-You are NOT just selecting "interesting" content — you are selecting content that can HOLD ATTENTION, GO VIRAL, and be turned into a compelling narrative.
+Your job is NOT to find "good" threads.
+Your job is to find threads that people will STOP SCROLLING for.
 
-You are given multiple 4chan thread previews:
+You are selecting content that maximizes:
+👉 Attention
+👉 Retention
+👉 Shareability
 
+━━━━━━━━━━━━━━━━━━━━━━━
+📥 THREADS
+━━━━━━━━━━━━━━━━━━━━━━━
 {context}
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 🎯 CORE OBJECTIVE
 ━━━━━━━━━━━━━━━━━━━━━━━
-Select EXACTLY ONE thread that has the HIGHEST potential to become a viral YouTube video.
+Select EXACTLY ONE thread that has the HIGHEST chance of going viral.
 
-If none meet the quality bar → return null.
+If none are strong → return null.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-🧠 HOW TO THINK (MANDATORY)
+🧠 VIRAL THINKING MODEL (MANDATORY)
 ━━━━━━━━━━━━━━━━━━━━━━━
 For EACH thread, internally evaluate:
 
-1. HOOK (0–10): Does it immediately grab attention?
-2. STORY (0–10): Is there a clear narrative (setup → conflict → payoff)?
-3. ENTERTAINMENT (0–10): Is it funny, shocking, awkward, or dramatic?
-4. CURIOSITY (0–10): Does it make people want to know what happens next?
-5. ENGAGEMENT SIGNAL (0–10): Reply count + discussion potential
+1. SCROLL-STOPPING HOOK (0–10)
+   - Would this make someone pause instantly?
 
-Then pick the thread with the BEST overall combination.
+2. ENTERTAINMENT / FUN (0–10)
+   - Is it funny, chaotic, awkward, or shocking?
 
-⚠️ Do NOT explain scores. Just use them to decide.
+3. RELATABILITY (0–10)
+   - Can a wide audience connect to this?
+
+4. CURIOSITY LOOP (0–10)
+   - Does it create “what happens next?” energy?
+
+5. PAYOFF STRENGTH (0–10) ⚠️ CRITICAL
+   - Is there a satisfying, funny, or surprising outcome?
+
+6. MEME POTENTIAL (0–10)
+   - Could this become a clip people share?
+
+7. LENGTH QUALITY (0–10)
+   - Is it concise but still meaningful?
+
+Pick the thread with the BEST COMBINATION.
+
+⚠️ Do NOT explain scoring.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-✅ STRONG POSITIVE SIGNALS
+🔥 VIRAL PRIORITY RULES
 ━━━━━━━━━━━━━━━━━━━━━━━
-- Greentext-style storytelling
-- Personal stories (bad dates, cringe moments, disasters, confessions)
-- Escalating or chaotic situations
+You are optimizing for:
+
+1. “Would I watch this till the end?”
+2. “Would I send this to a friend?”
+3. “Would this work as a 30–60 sec video?”
+
+If the answer is NO → reject it.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+💥 WHAT MAKES CONTENT VIRAL
+━━━━━━━━━━━━━━━━━━━━━━━
+Strong candidates usually include:
+
+- Awkward/cringe real-life situations
+- Relationship drama or misunderstandings
+- Socially relatable problems
 - Unexpected twists or reveals
-- Socially relatable or absurd scenarios
-- Threads where replies add humor or continuation
+- Chaotic or escalating stories
+- Absurd or stupidly funny situations
+- Confessions or “I messed up” moments
+
+BONUS:
+- Replies that make it funnier
+
+━━━━━━━━━━━━━━━━━━━━━━━
+📏 LENGTH LOGIC (OPTIMIZED)
+━━━━━━━━━━━━━━━━━━━━━━━
+- IDEAL: Medium-length (enough story, not overwhelming)
+- OK: Slightly longer IF very engaging
+- BAD:
+  • Too short → no substance
+  • Too long → kills retention
+
+Golden Rule:
+👉 “Short ≠ good. Entertaining = good.”
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 ❌ HARD REJECTION RULES
 ━━━━━━━━━━━━━━━━━━━━━━━
-IMMEDIATELY REJECT if the thread is:
-- Primarily political, ideological, or agenda-driven
-- Racist, hateful, or offensive without entertainment value
-- Focused on illegal acts in a serious/non-entertaining way
-- Low-effort ("rate this", "help me fix this", basic Q&A)
-- Too short, vague, or lacking context
-- No clear narrative or payoff
-- Dead thread (very low replies unless EXTREMELY compelling)
+REJECT if:
+- Boring, even if short
+- No clear situation or story
+- Just a plain question
+- No payoff or punchline
+- Political / hateful / illegal focus
+- Requires too much context to understand
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-⚖️ DECISION PRIORITY
+⚖️ FINAL DECISION
 ━━━━━━━━━━━━━━━━━━━━━━━
-1. STORY > everything else
-2. ENTERTAINMENT > shock value alone
-3. RELATABILITY > niche topics
-4. HIGH REPLIES = bonus, not requirement
-
-If a thread is funny BUT has no story → reject it.
-If a thread has a story BUT weak hook → consider carefully.
+Pick the thread that:
+- Is MOST entertaining
+- Has a CLEAR situation
+- Has a STRONG payoff
+- Feels like a complete short-form story
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 🧾 OUTPUT RULES (STRICT)
@@ -79,14 +127,14 @@ Respond ONLY in valid JSON.
 If a strong thread exists:
 {{ 
   "selected_thread_id": <thread_id>, 
-  "reason": "<1-2 sentence explanation focusing on viral potential>",
-  "full_preview": "<Rewrite the thread into a clean, engaging 2-4 sentence preview that sounds like a YouTube hook>"
+  "reason": "<Explain why this would go viral (hook + relatability + payoff)>",
+  "full_preview": "<Rewrite into a HIGH-HOOK 2-4 sentence script intro that grabs attention instantly>"
 }}
 
 If none qualify:
 {{ 
   "selected_thread_id": null, 
-  "reason": "None of the threads meet the minimum viral storytelling quality.",
+  "reason": "None of the threads are engaging enough to go viral.",
   "full_preview": "" 
 }}
 """
