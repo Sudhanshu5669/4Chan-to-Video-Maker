@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-import random
+import sys
 
 def clean_text(raw_html):
     if not raw_html:
@@ -14,11 +14,9 @@ def clean_text(raw_html):
         quote_link.decompose()
         
     # 2. Extract text, using a period/space to replace <br> tags 
-    # This forces the TTS voice to pause at line breaks.
     clean_str = soup.get_text(". ", strip=True)
     
-    # Optional: Clean up multiple spaces/periods if the user spammed line breaks
-    import re
+    # Clean up multiple spaces/periods if the user spammed line breaks
     clean_str = re.sub(r'\.\s*\.', '.', clean_str) 
     
     return clean_str
@@ -28,7 +26,7 @@ def get_post_data(board, thread_id, post_id):
     
     response = requests.get(
         url,
-        headers={"User-Agent": "Mozilla/5.0"},
+        headers={"User-Agent": "My4chanVideoMaker/1.0"},
         timeout=10
     )
     response.raise_for_status()
@@ -52,41 +50,86 @@ def get_post_data(board, thread_id, post_id):
         "has_image": "filename" in target_post
     }
 
+def truncate(text, length=120):
+    """Helper function to shorten text for console preview."""
+    if len(text) > length:
+        return text[:length] + "..."
+    return text if text else "[No text / Image only]"
 
-
-def get_trending_thread(board):
-    """Finds the thread with the most replies on the board catalog."""
+def interactive_post_selection(board):
+    """Displays pages of threads interactively for the user to select."""
     url = f"https://a.4cdn.org/{board}/catalog.json"
-    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
+    response = requests.get(url, headers={"User-Agent": "My4chanVideoMaker/1.0"}, timeout=10)
     response.raise_for_status()
     
     catalog = response.json()
-    all_threads = []
-    
-    # Flatten the catalog pages into one list
-    for page in catalog:
-        all_threads.extend(page['threads'])
-        
-    # Sort by number of replies (descending)
-    trending = sorted(all_threads, key=lambda x: x.get('replies', 0), reverse=True)
-    
-    # Filter: must have text and shouldn't be too short
-    # We ignore threads without a 'com' (comment) field
-    valid_threads = [t for t in trending if 'com' in t and len(clean_text(t['com'])) > 100]
-    
-    if not valid_threads:
-        raise ValueError("No suitable threads found.")
-        
-    # Return the top one (or a random one from the top 5 to keep content fresh)
-    return random.choice(valid_threads[:5])
+    current_page = 0
+    max_page = len(catalog) - 1
 
-def get_automated_post(board):
-    """Automatically finds a trending thread and returns the OP data."""
-    thread = get_trending_thread(board)
-    print(f"Found trending thread: {thread['no']} with {thread['replies']} replies.")
-    
-    return {
-        "thread_id": thread['no'],
-        "post_id": thread['no'], # Usually we want the OP (Original Poster)
-        "text": clean_text(thread['com'])
-    }
+    while True:
+        page_data = catalog[current_page]
+        threads = page_data.get('threads', [])
+        
+        print(f"\n{'='*60}")
+        print(f" BOARD: /{board}/ | PAGE: {current_page + 1} of {max_page + 1}")
+        print(f"{'='*60}")
+        
+        for t in threads:
+            t_id = t.get('no')
+            replies_count = t.get('replies', 0)
+            op_text = clean_text(t.get('com', ''))
+            
+            print(f"\n[{t_id}] ({replies_count} replies)")
+            print(f"OP: {truncate(op_text)}")
+            
+            # Show a couple of the last replies if available in the catalog
+            last_replies = t.get('last_replies', [])
+            if last_replies:
+                # Limit to previewing just 2 replies to keep the console clean
+                for i, rep in enumerate(last_replies[:2]):
+                    rep_text = clean_text(rep.get('com', ''))
+                    if rep_text:
+                        print(f"  -> Reply {i+1}: {truncate(rep_text, 80)}")
+        
+        print(f"\n{'-'*60}")
+        print("Options: [n] Next Page | [p] Prev Page | [q] Quit")
+        print("Or enter a [Thread ID] to generate a video for it.")
+        
+        choice = input("Choice: ").strip().lower()
+        
+        if choice == 'n':
+            if current_page < max_page:
+                current_page += 1
+            else:
+                print("\n*** You are already on the last page. ***")
+        elif choice == 'p':
+            if current_page > 0:
+                current_page -= 1
+            else:
+                print("\n*** You are already on the first page. ***")
+        elif choice == 'q':
+            sys.exit("Script exited by user.")
+        elif choice.isdigit():
+            selected_id = int(choice)
+            
+            # Search the entire catalog for the selected ID
+            selected_thread = None
+            for p in catalog:
+                for t in p['threads']:
+                    if t['no'] == selected_id:
+                        selected_thread = t
+                        break
+                if selected_thread:
+                    break
+            
+            if selected_thread:
+                print(f"\nSelected Thread: {selected_id}")
+                return {
+                    "thread_id": selected_thread['no'],
+                    "post_id": selected_thread['no'], 
+                    "text": clean_text(selected_thread.get('com', ''))
+                }
+            else:
+                print(f"\n*** Thread ID {selected_id} not found. Please try again. ***")
+        else:
+            print("\n*** Invalid input. Please enter 'n', 'p', 'q', or a Thread ID. ***")

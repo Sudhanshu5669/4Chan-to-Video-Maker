@@ -1,6 +1,6 @@
 import os
 import sys
-from scraper import get_automated_post
+from scraper import interactive_post_selection
 from screenshot import capture_post
 from tts import generate_tts
 from video import make_video
@@ -19,7 +19,7 @@ def run_automation(target_board="greentext"):
         print(f"--- Starting Automation for /{target_board}/ ---")
         
         # 1. FIND CONTENT
-        post_data = get_automated_post(target_board)
+        post_data = interactive_post_selection(target_board)
         t_id, p_id = post_data["thread_id"], post_data["post_id"]
         text = post_data["text"]
         
