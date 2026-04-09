@@ -4,132 +4,73 @@ import re
 import sys
 
 def clean_text(raw_html):
-    if not raw_html:
-        return ""
-        
+    if not raw_html: return ""
     soup = BeautifulSoup(raw_html, "html.parser")
-    
-    # 1. Remove reply links (>>12345678) so the TTS doesn't read numbers out loud
     for quote_link in soup.find_all("a", class_="quotelink"):
         quote_link.decompose()
-        
-    # 2. Extract text, using a period/space to replace <br> tags 
     clean_str = soup.get_text(". ", strip=True)
-    
-    # Clean up multiple spaces/periods if the user spammed line breaks
     clean_str = re.sub(r'\.\s*\.', '.', clean_str) 
-    
     return clean_str
 
-def get_post_data(board, thread_id, post_id):
-    url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
-    
-    response = requests.get(
-        url,
-        headers={"User-Agent": "My4chanVideoMaker/1.0"},
-        timeout=10
-    )
-    response.raise_for_status()
-    
-    data = response.json()
-    posts = data.get("posts", [])
-
-    if not posts:
-        raise ValueError("No posts found in thread.")
-    
-    target_post = next((p for p in posts if p['no'] == post_id), None)
-
-    if not target_post:
-        raise ValueError("Post not found in this thread.")
-    
-    return {
-        "id": target_post['no'],
-        "text": clean_text(target_post.get('com', '')),
-        "author": target_post.get("name"),
-        "time": target_post.get("time"),
-        "has_image": "filename" in target_post
-    }
-
-def truncate(text, length=120):
-    """Helper function to shorten text for console preview."""
-    if len(text) > length:
-        return text[:length] + "..."
-    return text if text else "[No text / Image only]"
+def truncate(text, length=100):
+    if len(text) > length: return text[:length] + "..."
+    return text if text else "[Image only]"
 
 def interactive_post_selection(board):
-    """Displays pages of threads interactively for the user to select."""
     url = f"https://a.4cdn.org/{board}/catalog.json"
-    response = requests.get(url, headers={"User-Agent": "My4chanVideoMaker/1.0"}, timeout=10)
+    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
     response.raise_for_status()
-    
     catalog = response.json()
+    
     current_page = 0
     max_page = len(catalog) - 1
+    selected_thread_id = None
 
-    while True:
+    # Step 1: Browse Catalog and pick a thread
+    while not selected_thread_id:
         page_data = catalog[current_page]
-        threads = page_data.get('threads', [])
+        print(f"\n{'='*60}\n BOARD: /{board}/ | PAGE: {current_page + 1} of {max_page + 1}\n{'='*60}")
         
-        print(f"\n{'='*60}")
-        print(f" BOARD: /{board}/ | PAGE: {current_page + 1} of {max_page + 1}")
-        print(f"{'='*60}")
-        
-        for t in threads:
-            t_id = t.get('no')
-            replies_count = t.get('replies', 0)
-            op_text = clean_text(t.get('com', ''))
+        for t in page_data.get('threads', []):
+            print(f"[{t.get('no')}] ({t.get('replies', 0)} replies) | {truncate(clean_text(t.get('com', '')))}")
             
-            print(f"\n[{t_id}] ({replies_count} replies)")
-            print(f"OP: {truncate(op_text)}")
-            
-            # Show a couple of the last replies if available in the catalog
-            last_replies = t.get('last_replies', [])
-            if last_replies:
-                # Limit to previewing just 2 replies to keep the console clean
-                for i, rep in enumerate(last_replies[:2]):
-                    rep_text = clean_text(rep.get('com', ''))
-                    if rep_text:
-                        print(f"  -> Reply {i+1}: {truncate(rep_text, 80)}")
+        choice = input("\n[n] Next | [p] Prev | [q] Quit | OR Enter [Thread ID]: ").strip().lower()
         
-        print(f"\n{'-'*60}")
-        print("Options: [n] Next Page | [p] Prev Page | [q] Quit")
-        print("Or enter a [Thread ID] to generate a video for it.")
-        
-        choice = input("Choice: ").strip().lower()
-        
-        if choice == 'n':
-            if current_page < max_page:
-                current_page += 1
-            else:
-                print("\n*** You are already on the last page. ***")
-        elif choice == 'p':
-            if current_page > 0:
-                current_page -= 1
-            else:
-                print("\n*** You are already on the first page. ***")
-        elif choice == 'q':
-            sys.exit("Script exited by user.")
-        elif choice.isdigit():
-            selected_id = int(choice)
+        if choice == 'n' and current_page < max_page: current_page += 1
+        elif choice == 'p' and current_page > 0: current_page -= 1
+        elif choice == 'q': sys.exit("Exited.")
+        elif choice.isdigit(): selected_thread_id = int(choice)
+
+    # Step 2: Fetch the full thread and pick replies
+    print(f"\nFetching full thread {selected_thread_id}...")
+    thread_url = f"https://a.4cdn.org/{board}/thread/{selected_thread_id}.json"
+    thread_resp = requests.get(thread_url, headers={"User-Agent": "MyBot/1.0"}).json()
+    posts = thread_resp['posts']
+
+    print("\n--- THREAD LOADED (Top 15 Posts) ---")
+    for p in posts[:15]:
+        print(f"[{p['no']}] {truncate(clean_text(p.get('com', '')))}")
+
+    print("\nWhich posts do you want in the video?")
+    print("Enter comma-separated IDs (e.g., 12345, 12346).")
+    print(f"Leave blank and press Enter to just use the OP ({selected_thread_id}).")
+    
+    selection = input("IDs: ").strip()
+    
+    # Parse the user's choice
+    if not selection:
+        selected_ids = [selected_thread_id]
+    else:
+        selected_ids = [int(x.strip()) for x in selection.split(',') if x.strip().isdigit()]
+
+    # Gather data for all selected posts
+    final_posts_data = []
+    for p in posts:
+        if p['no'] in selected_ids:
+            final_posts_data.append({
+                "thread_id": selected_thread_id,
+                "post_id": p['no'],
+                "text": clean_text(p.get('com', ''))
+            })
             
-            # Search the entire catalog for the selected ID
-            selected_thread = None
-            for p in catalog:
-                for t in p['threads']:
-                    if t['no'] == selected_id:
-                        selected_thread = t
-                        break
-                if selected_thread:
-                    break
-            
-            if selected_thread:
-                print(f"\nSelected Thread: {selected_id}")
-                return {
-                    "thread_id": selected_thread['no'],
-                    "post_id": selected_thread['no'], 
-                    "text": clean_text(selected_thread.get('com', ''))
-                }
-            else:
-                print(f"\n*** Thread ID {selected_id} not found. Please try again. ***")
-        else:
-            print("\n*** Invalid input. Please enter 'n', 'p', 'q', or a Thread ID. ***")
+    return final_posts_data

@@ -1,51 +1,46 @@
-import numpy as np
-from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip
+import PIL.Image
+# --- MONKEY PATCH FOR PILLOW 10 COMPATIBILITY ---
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS if hasattr(PIL.Image, "Resampling") else PIL.Image.LANCZOS
 
-def make_video(bg_video_path, image_path, audio_path, output_path):
-    # Load audio
-    audio_clip = AudioFileClip(audio_path)
-    duration = audio_clip.duration
+from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip, concatenate_videoclips, concatenate_audioclips
+
+def make_video(bg_video_path, image_paths, audio_paths, output_path):
     
-    # Load and crop background video to match audio length
+    # Load background video first so we can get its dimensions
     bg_clip = VideoFileClip(bg_video_path)
-    if bg_clip.duration < duration:
-        print("Warning: Background video is shorter than the TTS audio!")
-    bg_clip = bg_clip.subclip(0, duration)
+    bg_width, bg_height = bg_clip.size
     
-    # Load image overlay
-    img_clip = ImageClip(image_path).set_duration(duration)
+    # Calculate perfect width for the screenshot (85% of screen width)
+    target_width = int(bg_width * 0.85)
     
-    # Add an alpha channel (mask) to the image for transparency
-    img_clip = img_clip.add_mask()
+    audio_clips = []
+    image_clips = []
     
-    # --- The Reveal Animation Logic ---
-    def reveal_mask(get_frame, t):
-        # Get the original mask frame (usually an array of 1.0s or 255s)
-        mask_frame = get_frame(t)
-        h = mask_frame.shape[0]
+    for img_path, aud_path in zip(image_paths, audio_paths):
+        aud = AudioFileClip(aud_path)
+        audio_clips.append(aud)
         
-        # Calculate how much should be visible based on current time
-        progress = min(1.0, t / duration)
-        visible_h = int(h * progress)
+        # Load image, sync to audio, AND resize to prevent overflow
+        img = ImageClip(img_path).set_duration(aud.duration)
+        img = img.resize(width=target_width)
+        img = img.set_position("center")
         
-        # Create a copy and make the bottom portion transparent (0)
-        new_mask = np.copy(mask_frame)
-        if visible_h < h:
-            new_mask[visible_h:, :] = 0 
-            
-        return new_mask
+        image_clips.append(img)
         
-    # Apply the animated mask to the image
-    img_clip.mask = img_clip.mask.fl(reveal_mask)
+    final_audio = concatenate_audioclips(audio_clips)
+    final_images = concatenate_videoclips(image_clips).set_position("center")
     
-    # Center the image on the screen
-    img_clip = img_clip.set_position("center")
+    # Loop or cut background video
+    if bg_clip.duration < final_audio.duration:
+        from moviepy.video.fx.all import loop
+        bg_clip = loop(bg_clip, duration=final_audio.duration)
+    else:
+        bg_clip = bg_clip.subclip(0, final_audio.duration)
+        
+    final_video = CompositeVideoClip([bg_clip, final_images])
+    final_video = final_video.set_audio(final_audio)
     
-    # Composite them together
-    final_video = CompositeVideoClip([bg_clip, img_clip])
-    final_video = final_video.set_audio(audio_clip)
-    
-    # Render (optimized for TikTok/Shorts viewing)
     final_video.write_videofile(
         output_path, 
         fps=30, 
