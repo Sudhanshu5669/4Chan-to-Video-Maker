@@ -1,4 +1,4 @@
 .venv/
 backend/output
 backend/temp
-backend/assets
+backend/assets/
