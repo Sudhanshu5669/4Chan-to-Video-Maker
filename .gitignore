@@ -3,3 +3,4 @@ backend/output
 backend/temp
 backend/assets/
 backend/client_secrets.json
+backend/token.json
