@@ -69,7 +69,7 @@ ollama pull blaifa/InternVL3_5:8b
 
 ### 6. Add Your Background Video
 Create a folder named `assets` in the root directory (if it doesn't exist) and place your background gameplay video inside it.
-**You must name the file exactly:** `background.mp4`.
+**It will automatically pick a video from the list.**
 
 ---
 

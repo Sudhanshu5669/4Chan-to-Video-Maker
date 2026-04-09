@@ -6,6 +6,7 @@ import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from Uploader import upload_to_youtube
 from scraper import interactive_post_selection, get_catalog_page_candidates, clean_text, get_all_boards
 from screenshot import capture_post
 from tts import generate_tts
@@ -232,6 +233,34 @@ def run_automation():
         out = f"output/shorts_{thread_id}.mp4"
         make_video(bg_video, ordered_imgs, ordered_audios, out)
         print(f"\n  ✅  Done!  →  {out}\n")
+
+        # ── 9. YOUTUBE UPLOAD ────────────────────
+        print("  📺  Do you want to upload this video to YouTube now?")
+        upload_choice = input("  Upload? (y/n): ").strip().lower()
+        
+        if upload_choice == 'y':
+            # Generate default "dank" fallbacks
+            default_title = f"4chan /{target_board}/ is actually unhinged 💀"
+            default_desc = f"They really said that... \n\n#4chan #greentext #{target_board} #redditstories #shorts"
+            video_tags = ["4chan", "greentext", "reddit stories", "shorts", "tiktok"]
+            
+            print("\n  --- YOUTUBE METADATA ---")
+            print(f"  Default Title: {default_title}")
+            custom_title = input("  Enter custom title (or press Enter to use default): ").strip()
+            video_title = custom_title if custom_title else default_title
+            
+            print(f"\n  Default Description: {default_desc}")
+            custom_desc = input("  Enter custom description (or press Enter to use default): ").strip()
+            video_desc = custom_desc if custom_desc else default_desc
+            
+            # Execute the upload (passing `out` which is the rendered video path)
+            upload_to_youtube(
+                video_path=out,
+                title=video_title,
+                description=video_desc,
+                tags=video_tags,
+                privacy="public" # Change to "public" when you are ready to go live
+            )
 
     except Exception as e:
         import traceback
