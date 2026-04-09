@@ -3,87 +3,100 @@ from bs4 import BeautifulSoup
 import re
 import sys
 
-def clean_text(raw_html):
-    if not raw_html: return ""
+
+def clean_text(raw_html: str) -> str:
+    if not raw_html:
+        return ""
     soup = BeautifulSoup(raw_html, "html.parser")
-    
-    # Remove standard 4chan reply links (>>123456)
-    for quote_link in soup.find_all("a", class_="quotelink"):
-        quote_link.decompose()
-        
-    clean_str = soup.get_text(". ", strip=True)
-    
-    # --- NEW: DESTROY URLs ---
-    # This regex finds anything starting with http/https and removes it
-    clean_str = re.sub(r'http[s]?://\S+', '', clean_str)
-    
-    # Clean up double periods or weird spacing left behind
-    clean_str = re.sub(r'\.\s*\.', '.', clean_str) 
-    
-    return clean_str.strip()
 
-def truncate(text, length=100):
-    if len(text) > length: return text[:length] + "..."
-    return text if text else "[Image only]"
+    # Remove reply links (>>123456)
+    for tag in soup.find_all("a", class_="quotelink"):
+        tag.decompose()
 
-def get_catalog_page_candidates(board, page_index):
-    """Fetches a specific page of the catalog and returns the top 10 most replied threads."""
-    url = f"https://a.4cdn.org/{board}/catalog.json"
-    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
-    response.raise_for_status()
-    catalog = response.json()
-    
-    if page_index >= len(catalog):
-        return None # No more pages
-        
-    threads = catalog[page_index].get('threads', [])
-    # Sort by replies to give the LLM the most active threads
-    active_threads = sorted(threads, key=lambda x: x.get('replies', 0), reverse=True)
-    
-    candidates = []
-    # Only take the top 10 to avoid overwhelming the LLM's context limit
-    for t in active_threads[:10]:
-        text = clean_text(t.get('com', ''))
-        if len(text) > 20: # Ignore pure image posts
-            candidates.append({
-                "id": t['no'],
-                "replies": t.get('replies', 0),
-                "text": truncate(text, 250) # Truncate to save LLM memory
-            })
-            
-    return candidates
+    text = soup.get_text(". ", strip=True)
 
-def interactive_post_selection(board):
-    """Your existing manual mode selector."""
-    url = f"https://a.4cdn.org/{board}/catalog.json"
-    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
-    response.raise_for_status()
-    catalog = response.json()
-    
-    current_page = 0
-    max_page = len(catalog) - 1
-    selected_thread_id = None
+    # Strip URLs
+    text = re.sub(r"https?://\S+", "", text)
+    # Collapse double-periods left by URL removal
+    text = re.sub(r"\.\s*\.", ".", text)
+    # Collapse excessive whitespace
+    text = re.sub(r"\s{2,}", " ", text)
 
-    while not selected_thread_id:
-        page_data = catalog[current_page]
-        print(f"\n{'='*60}\n BOARD: /{board}/ | PAGE: {current_page + 1} of {max_page + 1}\n{'='*60}")
-        
-        for t in page_data.get('threads', []):
-            print(f"[{t.get('no')}] ({t.get('replies', 0)} replies) | {truncate(clean_text(t.get('com', '')))}")
-            
-        choice = input("\n[n] Next | [p] Prev | [q] Quit | OR Enter [Thread ID]: ").strip().lower()
-        
-        if choice == 'n' and current_page < max_page: current_page += 1
-        elif choice == 'p' and current_page > 0: current_page -= 1
-        elif choice == 'q': sys.exit("Exited.")
-        elif choice.isdigit(): selected_thread_id = int(choice)
-
-    return selected_thread_id
+    return text.strip()
 
 
-def get_all_boards():
-    """Fetches the live list of all active 4chan boards."""
+def truncate(text: str, length: int = 100) -> str:
+    if not text:
+        return "[Image only]"
+    return text[:length] + "…" if len(text) > length else text
+
+
+def get_all_boards() -> list[dict]:
+    """Returns list of {board, title} dicts for all active boards."""
     url = "https://a.4cdn.org/boards.json"
-    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
-    response.raise_for_status()
-    return response.json()['boards']
+    r = requests.get(url, headers={"User-Agent": "4chanBot/2.0"}, timeout=10)
+    r.raise_for_status()
+    return r.json()["boards"]
+
+
+def get_catalog_page_candidates(board: str, page_index: int) -> list[dict] | None:
+    """
+    Returns the top 10 most-replied text threads on catalog page `page_index`.
+    Returns None when there are no more pages.
+    """
+    url = f"https://a.4cdn.org/{board}/catalog.json"
+    r = requests.get(url, headers={"User-Agent": "4chanBot/2.0"}, timeout=10)
+    r.raise_for_status()
+    catalog = r.json()
+
+    if page_index >= len(catalog):
+        return None
+
+    threads = catalog[page_index].get("threads", [])
+    # Sort by reply count descending – more replies = more engagement
+    threads = sorted(threads, key=lambda t: t.get("replies", 0), reverse=True)
+
+    candidates = []
+    for t in threads:
+        text = clean_text(t.get("com", ""))
+        # Skip image-only posts and very short stubs
+        if len(text) < 30:
+            continue
+        candidates.append({
+            "id":      t["no"],
+            "replies": t.get("replies", 0),
+            "text":    truncate(text, 280),
+        })
+        if len(candidates) == 10:
+            break
+
+    return candidates or None
+
+
+def interactive_post_selection(board: str) -> int:
+    """Manual mode: browse catalog pages and pick a thread ID."""
+    url = f"https://a.4cdn.org/{board}/catalog.json"
+    r = requests.get(url, headers={"User-Agent": "4chanBot/2.0"}, timeout=10)
+    r.raise_for_status()
+    catalog = r.json()
+
+    page     = 0
+    max_page = len(catalog) - 1
+    selected = None
+
+    while selected is None:
+        print(f"\n{'═'*60}")
+        print(f"  /{board}/  │  Page {page + 1} of {max_page + 1}")
+        print(f"{'═'*60}")
+        for t in catalog[page].get("threads", []):
+            preview = truncate(clean_text(t.get("com", "")))
+            print(f"  [{t['no']}] ({t.get('replies', 0)} replies)  {preview}")
+        print()
+        choice = input("  [n] Next  [p] Prev  [q] Quit  or Thread ID: ").strip().lower()
+
+        if   choice == "n" and page < max_page: page += 1
+        elif choice == "p" and page > 0:        page -= 1
+        elif choice == "q":                     sys.exit("Exited.")
+        elif choice.isdigit():                  selected = int(choice)
+
+    return selected

@@ -1,44 +1,183 @@
 from playwright.sync_api import sync_playwright
 
-def capture_post(board, thread_id, post_id, output_path, replacement_text=None):
+
+# ── Injected CSS: clean card design with high-contrast, readable text ─────────
+# Text colors have been lightened to near-white for excellent readability
+# ── Injected CSS: clean card design with high-contrast, readable text ─────────
+CARD_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background: #000 !important; 
+    padding: 20px !important;
+    margin: 0 !important;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif !important;
+}
+
+/* Hide UI clutter */
+.navLinks, .boardBanner, #header-bar, .bottomCtrl, #ctrl-top, #globalMessage,
+.sideArrows, .mobileHeader, #post-moderation-fields, .navLinksBot, #blotter, hr { 
+    display: none !important; 
+}
+
+/* The card itself */
+.highlight-card {
+    display: block !important;
+    width: 460px;
+    background: #111 !important; 
+    border: 1px solid #333 !important; 
+    border-radius: 16px !important;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.8) !important;
+    padding: 0 !important;
+    margin: 0 auto !important; 
+}
+
+/* Top bar mimicking an app header */
+.highlight-card::before {
+    content: '';
+    display: block;
+    height: 4px;
+    background: linear-gradient(90deg, #ff6b35, #f7c59f);
+    border-radius: 16px 16px 0 0;
+}
+
+/* --- THE FIX: STRIP 4CHAN'S NATIVE REPLY STYLING --- */
+.highlight-card .post {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important; /* Overrides 4chan's native display: table for replies */
+}
+/* --------------------------------------------------- */
+
+.highlight-card .postInfo {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 18px 6px !important;
+    font-size: 13px !important;
+    color: #eee !important; 
+    border-bottom: 1px solid #252525;
+}
+
+.highlight-card .nameBlock { color: #fff !important; }
+.highlight-card .dateTime  { color: #ddd !important; font-size: 12px !important; }
+
+/* Hide stuff we don't need inside the card */
+.highlight-card .fileThumb,
+.highlight-card .fileInfo,
+.highlight-card .postMenu,
+.highlight-card .backlink,
+.highlight-card .mobilePostControls,
+.highlight-card a.quotelink { display: none !important; }
+
+/* The actual post text */
+.highlight-card .postMessage,
+.highlight-card blockquote {
+    display: block !important;
+    padding: 14px 18px 18px !important;
+    font-size: 19px !important;
+    line-height: 1.55 !important;
+    color: #fff !important; 
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+/* Greentext */
+.highlight-card .quote { color: #8fef8f !important; }
+"""
+
+
+def capture_post(board: str, thread_id: int, post_id: int,
+                 output_path: str, replacement_text: str | None = None):
+    """
+    Navigates to the thread, isolates a single post as a styled card,
+    injects censored text if provided, and screenshots it.
+    """
     url = f"https://boards.4chan.org/{board}/thread/{thread_id}"
-    
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        
-        # Emulate a mobile phone screen for better text wrapping
         context = browser.new_context(
-            viewport={'width': 400, 'height': 800},
-            device_scale_factor=2, # Makes the screenshot high-resolution
-            is_mobile=True
+            viewport={"width": 500, "height": 900},
+            device_scale_factor=2,
         )
-        
         page = context.new_page()
-        page.goto(url)
-        
-        # Inject CSS to remove clutter, bump font size, and force dark mode
-        custom_css = """
-        body { background-color: #1d1f21 !important; color: #c5c8c6 !important; font-size: 26px !important; }
-        .post { background-color: #282a2e !important; border: 1px solid #373b41 !important; padding: 15px !important; width: 100% !important; box-sizing: border-box !important;}
-        .postInfo { font-size: 22px !important; }
-        .backlink { display: none !important; }
-        """
-        page.add_style_tag(content=custom_css)
-        
+
+        # Block images/media to load faster – we only need the text
+        page.route("**/*.{png,jpg,jpeg,gif,webp,svg,mp4,webm}", lambda r: r.abort())
+        page.route("**/ads/**", lambda r: r.abort())
+
+        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        page.add_style_tag(content=CARD_CSS)
+
         selector = f"#pc{post_id}"
-        
-        # --- THE DOM INJECTION (CENSOR FEATURE) ---
-        # If the LLM provided censored text, replace the HTML content of the post
+
+        # Isolate the target post and force it visible regardless of page CSS
+        page.evaluate(f"""
+            const el = document.querySelector('{selector}');
+            if (el) {{
+                el.classList.add('highlight-card');
+                // Force the card itself visible (overrides any display:none from page or our CSS)
+                el.style.cssText += '; display:block !important; visibility:visible !important; opacity:1 !important;';
+                // Hide everything else
+                document.querySelectorAll('.postContainer').forEach(p => {{
+                    if (p !== el) p.style.display = 'none';
+                }});
+            }}
+        """)
+
+        # Inject censored text
         if replacement_text:
-            # Escape single quotes and newlines so the JavaScript doesn't break
-            safe_text = replacement_text.replace("'", "\\'").replace('\n', '<br>')
-            js_code = f"""
-            var el = document.querySelector('{selector} .blockquote');
-            if(el) {{ el.innerHTML = '{safe_text}'; }}
-            """
-            page.evaluate(js_code)
-        
-        post_element = page.locator(selector)
-        post_element.screenshot(path=output_path)
-        
+            safe = (
+                replacement_text
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "<br>")
+            )
+            page.evaluate(f"""
+                const msg = document.querySelector('{selector} .postMessage')
+                         || document.querySelector('{selector} blockquote');
+                if (msg) msg.innerHTML = '{safe}';
+            """)
+
+        # Let the layout settle after our DOM surgery
+        page.wait_for_timeout(500)
+
+        # Get bounding box via JS — bypasses all playwright visibility checks
+        bbox = page.evaluate("""
+            (() => {
+                const el = document.querySelector('""" + selector + """');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { x: r.left, y: r.top, width: r.width, height: r.height };
+            })()
+        """)
+
+        if not bbox or bbox["width"] == 0 or bbox["height"] == 0:
+            raise RuntimeError(
+                f"Could not get bounding box for post {post_id} — element may not exist in thread."
+            )
+
+        # Expand viewport so the element is never clipped
+        page.set_viewport_size({
+            "width":  max(500, int(bbox["x"] + bbox["width"])  + 20),
+            "height": max(200, int(bbox["y"] + bbox["height"]) + 20),
+        })
+
+        # page.screenshot(clip=...) captures raw pixels — no visibility requirement
+        page.screenshot(
+            path=output_path,
+            clip={
+                "x":      bbox["x"],
+                "y":      bbox["y"],
+                "width":  bbox["width"],
+                "height": bbox["height"],
+            },
+            scale="device",
+        )
+
         browser.close()
