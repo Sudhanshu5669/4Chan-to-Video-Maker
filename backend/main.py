@@ -2,7 +2,7 @@ import os
 import sys
 import requests
 import time
-from scraper import interactive_post_selection, get_catalog_page_candidates, clean_text
+from scraper import interactive_post_selection, get_catalog_page_candidates, clean_text, get_all_boards
 from screenshot import capture_post
 from tts import generate_tts
 from video import make_video
@@ -39,14 +39,41 @@ def run_automation():
     ======================================
     """)
     
-    # 1. Ask for Board
-    target_board = input("Enter the board letter you want to scrape (e.g., v, g, b, pol, r9k): ").strip().strip('/')
-    
-    # 2. Ask for Mode
+    # --- 1. INTERACTIVE BOARD SELECTOR ---
+    print("Fetching live board list from 4chan...")
+    try:
+        boards = get_all_boards()
+        print("\n--- AVAILABLE BOARDS ---")
+        
+        col_width = 30
+        for i in range(0, len(boards), 3):
+            row = boards[i:i+3]
+            formatted_row = ""
+            for b in row:
+                entry = f"/{b['board']}/ - {b['title']}"
+                if len(entry) > col_width - 2:
+                    entry = entry[:col_width - 4] + "..."
+                formatted_row += f"{entry:<{col_width}}"
+            print(formatted_row)
+            
+        valid_boards = [b['board'] for b in boards]
+        target_board = ""
+        while target_board not in valid_boards:
+            target_board = input("\nEnter the board abbreviation you want (e.g., v, g, pol): ").strip().strip('/')
+            if target_board not in valid_boards:
+                print(f"Error: '{target_board}' is not a valid board. Try again.")
+                
+    except Exception as e:
+        print(f"Failed to fetch boards: {e}")
+        target_board = input("Enter the board letter manually: ").strip().strip('/')
+
+    # --- 2. Ask for Mode ---
+    print(f"\n[ Selected Board: /{target_board}/ ]")
     print("\nSelect Mode:")
     print("[1] Manual (You browse the catalog and pick the thread)")
-    print("[2] Auto (The AI browses the catalog, finds the best thread, and makes the video)")
-    mode_choice = input("Choice (1 or 2): ").strip()
+    print("[2] Full Auto (The AI browses, finds the best thread, and makes the video)")
+    print("[3] Review Mode (The AI scouts threads, but asks YOUR permission before rendering)")
+    mode_choice = input("Choice (1, 2, or 3): ").strip()
     
     thread_id = None
     
@@ -54,9 +81,11 @@ def run_automation():
         print("\n--- Starting MANUAL Mode ---")
         thread_id = interactive_post_selection(target_board)
         
-    elif mode_choice == "2":
-        print("\n--- Starting AUTO Mode ---")
+    elif mode_choice in ["2", "3"]:
+        mode_name = "AUTO" if mode_choice == "2" else "REVIEW"
+        print(f"\n--- Starting {mode_name} Mode ---")
         page = 0
+        
         while not thread_id:
             print(f"\nTurning to Page {page + 1} of the Catalog...")
             candidates = get_catalog_page_candidates(target_board, page)
@@ -65,17 +94,37 @@ def run_automation():
                 print("The AI searched the entire board and found nothing good. Exiting.")
                 return
                 
-            # Ask the LLM to pick
-            best_id, reason = scout_best_thread(candidates)
+            while candidates and not thread_id:
+                scout_result = scout_best_thread(candidates)
+                if len(scout_result) == 3:
+                    best_id, reason, preview = scout_result
+                else:
+                    best_id, reason = scout_result[0], scout_result[1]
+                    preview = "No preview available."
+
+                if best_id:
+                    if mode_choice == "3":
+                        print(f"\n--- 🎯 AI SUGGESTION (Thread {best_id}) ---")
+                        print(f"REASON: {reason}")
+                        print(f"PREVIEW: {preview}")
+                        choice = input("\nDo you want to make a video of this? (y/n): ").strip().lower()
+                        
+                        if choice == 'y':
+                            thread_id = best_id
+                        else:
+                            print("Rejected by user. Asking AI to find another on this page...")
+                            candidates = [c for c in candidates if c['id'] != best_id]
+                    else:
+                        print(f"🎯 LLM Scout found a match! Thread ID: {best_id}")
+                        print(f"Reason: {reason}")
+                        thread_id = best_id
+                else:
+                    print(f"LLM Scout rejected the rest of Page {page + 1}. Reason: {reason}")
+                    break 
             
-            if best_id:
-                print(f"🎯 LLM Scout found a match! Thread ID: {best_id}")
-                print(f"Reason: {reason}")
-                thread_id = best_id
-            else:
-                print(f"LLM Scout rejected Page {page + 1}. Reason: {reason}")
+            if not thread_id:
                 page += 1
-                time.sleep(1) # Be nice to the API
+                time.sleep(1) 
     else:
         print("Invalid choice. Exiting.")
         return
@@ -92,16 +141,40 @@ def run_automation():
             print("The LLM Editor failed to process the thread.")
             return 
             
+        # --- 5. NEW: REPLY REVIEW SYSTEM ---
         final_playlist = [{"id": thread_id, "text": llm_decision['op_censored']}]
-        for rep in llm_decision.get('selected_replies', []):
-            final_playlist.append({"id": rep['id'], "text": rep['censored_text']})
         
-        print(f"\n[LLM Editor] Script ready. Generating {len(final_playlist)} scenes.")
+        # If they are in Mode 3, ask them how they want to handle the replies
+        reply_mode = "1"
+        if mode_choice == "3":
+            print("\n--- SCRIPT GENERATED ---")
+            print("How do you want to handle the replies the AI selected?")
+            print("[1] Auto (Render all of them into the video)")
+            print("[2] Review (Approve/Reject each reply individually)")
+            reply_mode = input("Choice (1 or 2): ").strip()
+            
+        if reply_mode == "2":
+            print("\n--- SCRIPT REVIEW ---")
+            print(f"OP [Included Automatically]: {llm_decision['op_censored']}\n")
+            
+            for rep in llm_decision.get('selected_replies', []):
+                print(f"-> REPLY {rep['id']}: {rep['censored_text']}")
+                keep = input("Include this reply? (y/n): ").strip().lower()
+                if keep == 'y':
+                    final_playlist.append({"id": rep['id'], "text": rep['censored_text']})
+                else:
+                    print("   [Discarded]")
+        else:
+            # Auto mode: Just dump them all in
+            for rep in llm_decision.get('selected_replies', []):
+                final_playlist.append({"id": rep['id'], "text": rep['censored_text']})
+        
+        print(f"\n[Final Cut] Script ready. Generating {len(final_playlist)} scenes.")
         
         image_paths = []
         audio_paths = []
         
-        # 5. Generate Media
+        # 6. Generate Media
         for index, post in enumerate(final_playlist):
             p_id = post["id"]
             censored_text = post["text"]
@@ -116,7 +189,7 @@ def run_automation():
             image_paths.append(img_path)
             audio_paths.append(audio_path)
 
-        # 6. VIDEO ASSEMBLY
+        # 7. VIDEO ASSEMBLY
         print("\nRendering final sequential video...")
         output_name = f"output/viral_video_{thread_id}.mp4"
         make_video(BG_VIDEO, image_paths, audio_paths, output_name)

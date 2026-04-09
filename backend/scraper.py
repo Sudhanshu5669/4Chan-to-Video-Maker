@@ -6,10 +6,21 @@ import sys
 def clean_text(raw_html):
     if not raw_html: return ""
     soup = BeautifulSoup(raw_html, "html.parser")
+    
+    # Remove standard 4chan reply links (>>123456)
     for quote_link in soup.find_all("a", class_="quotelink"):
         quote_link.decompose()
+        
     clean_str = soup.get_text(". ", strip=True)
-    return re.sub(r'\.\s*\.', '.', clean_str) 
+    
+    # --- NEW: DESTROY URLs ---
+    # This regex finds anything starting with http/https and removes it
+    clean_str = re.sub(r'http[s]?://\S+', '', clean_str)
+    
+    # Clean up double periods or weird spacing left behind
+    clean_str = re.sub(r'\.\s*\.', '.', clean_str) 
+    
+    return clean_str.strip()
 
 def truncate(text, length=100):
     if len(text) > length: return text[:length] + "..."
@@ -68,3 +79,11 @@ def interactive_post_selection(board):
         elif choice.isdigit(): selected_thread_id = int(choice)
 
     return selected_thread_id
+
+
+def get_all_boards():
+    """Fetches the live list of all active 4chan boards."""
+    url = "https://a.4cdn.org/boards.json"
+    response = requests.get(url, headers={"User-Agent": "MyBot/1.0"}, timeout=10)
+    response.raise_for_status()
+    return response.json()['boards']
