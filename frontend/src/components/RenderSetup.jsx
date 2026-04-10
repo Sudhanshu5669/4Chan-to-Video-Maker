@@ -64,6 +64,38 @@ export default function RenderSetup({
             />
           </div>
 
+          {/* Catalog Starting Page (Auto-Scout) */}
+          {isAuto && (
+            <div className="form-group">
+              <label className="form-label">Starting Catalog Page Configuration</label>
+              <div className="flex-center gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  placeholder="Page (0-10)"
+                  value={renderSettings.startPage}
+                  onChange={e =>
+                    onUpdateSettings({ ...renderSettings, startPage: parseInt(e.target.value) || 0 })
+                  }
+                  disabled={renderSettings.randomPage}
+                  style={{ flex: 1 }}
+                />
+                <label className="toggle-switch" title="Pick a random Thread Page layout randomly on execution." style={{ marginLeft: '1rem' }}>
+                  <span className="text-secondary" style={{ marginRight: '0.4rem', fontSize: '0.85rem' }}>Random</span>
+                  <input
+                    type="checkbox"
+                    checked={renderSettings.randomPage}
+                    onChange={e =>
+                      onUpdateSettings({ ...renderSettings, randomPage: e.target.checked })
+                    }
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+            </div>
+          )}
+
           {/* TTS Voice Selection */}
           <div className="form-group">
             <label className="form-label">

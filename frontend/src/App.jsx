@@ -14,6 +14,7 @@ import DoneScreen from './components/DoneScreen';
 import StreamTerminal from './components/StreamTerminal';
 import SettingsPanel from './components/SettingsPanel';
 import VideoHistory from './components/VideoHistory';
+import BatchPipeline from './components/BatchPipeline';
 
 function App() {
   // ── State ───────────────────────────────────────────────────────────────
@@ -43,6 +44,8 @@ function App() {
     ttsVoice: 'en-US-ChristopherNeural',
     musicFile: '',
     musicVolume: 0.15,
+    startPage: 0,
+    randomPage: false,
   });
 
   const [renderResult, setRenderResult] = useState(null);
@@ -146,10 +149,12 @@ function App() {
   };
 
   // ── Scout ───────────────────────────────────────────────────────────────
-  const scoutBoard = async (startPage = 0, currentCandidates = []) => {
+  const scoutBoard = async (overrideStartPage = null, currentCandidates = []) => {
     if (!selectedBoard) return;
     setLoading(true);
-    let currentPage = startPage;
+    let currentPage = overrideStartPage !== null 
+      ? overrideStartPage 
+      : (renderSettings.randomPage ? Math.floor(Math.random() * 10) : renderSettings.startPage);
     let availableCandidates = currentCandidates;
     let foundResult = null;
 
@@ -432,6 +437,13 @@ function App() {
         <div className="flex-center gap-1">
           <button
             className="icon-button"
+            onClick={() => setStep('batch')}
+            title="Batch Automation"
+          >
+            Automation
+          </button>
+          <button
+            className="icon-button"
             onClick={() => setStep('history')}
             title="Video History"
           >
@@ -444,7 +456,7 @@ function App() {
           >
             Settings
           </button>
-          {step !== 'board' && step !== 'settings' && step !== 'history' && (
+          {step !== 'board' && step !== 'settings' && step !== 'history' && step !== 'batch' && (
             <button
               className="btn-secondary"
               onClick={() => {
@@ -509,11 +521,19 @@ function App() {
               const remaining = scoutedThreadResult.candidates.filter(
                 c => c.id !== scoutedThreadResult.best_id
               );
-              scoutBoard(scoutedThreadResult.currentPage, remaining);
+              if (remaining.length === 0) {
+                 scoutBoard(scoutedThreadResult.currentPage + 1, []);
+              } else {
+                 scoutBoard(scoutedThreadResult.currentPage, remaining);
+              }
             }}
-            onAccept={() => {
+            onNextPage={() => {
+              scoutBoard(scoutedThreadResult.currentPage + 1, []);
+            }}
+            onAccept={(selectedId) => {
+              setSelectedThread(selectedId);
               setLoading(true);
-              loadThreadDataStream(selectedBoard, scoutedThreadResult.best_id, false);
+              loadThreadDataStream(selectedBoard, selectedId, false);
             }}
           />
         )}
@@ -568,6 +588,10 @@ function App() {
 
         {step === 'history' && (
           <VideoHistory onBack={() => setStep('board')} />
+        )}
+
+        {step === 'batch' && (
+          <BatchPipeline onBack={() => setStep('board')} />
         )}
       </main>
 

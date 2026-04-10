@@ -142,76 +142,127 @@ Return ONLY valid JSON:
 
 def scout_best_thread_stream(threads_data: list, model: str = None):
     """
-    Streaming version of scout_best_thread. Yields ("chunk", text) and finally ("result", dict) or ("error", str).
+    Streaming version of scout_best_thread with two-pass Multi-Scouting.
+    Yields ("chunk", text) and finally ("result", dict) or ("error", str).
     """
-    context = "\n".join(
-        f"ID:{t['id']} REPLIES:{t['replies']}\n{t['text']}"
+    if not threads_data:
+        yield ("error", "No threads provided.")
+        return
+
+    cfg_model, cfg_temp = get_llm_settings()
+    model = model or cfg_model
+
+    # ── Pass 1: Score all threads ──
+    yield ("chunk", "\\n[Pass 1] Generating initial Dankness Leaderboard...\\n\\n")
+    context_p1 = "\\n".join(
+        f"ID:{t['id']} | REPLIES:{t['replies']}\\n{t['text'][:500]}..."
         for t in threads_data
     )
 
-    prompt = f"""You are a YouTube Shorts producer looking for extremely viral, funny, and dank 4chan threads. Review the threads below. Your goal is to pick the PERFECT thread with high comedic or dank potential.
+    prompt_p1 = f"""You are a YouTube Shorts producer auditing 4chan threads for viral potential.
+Review the threads below and score EACH ONE out of 10.
 
 THREADS:
-{context}
+{context_p1}
 
-VIRAL CRITERIA (score each internally, pick highest total):
-- Dank & Comedic: Is it genuinely funny, absurd, or unexpectedly hilarious?
-- Strong hook: does the opening line grab attention instantly?
-- Clear situation: is there an actual story, conflict, or scenario?
-- Payoff: is there a satisfying punchline or twist?
+CRITERIA:
+10/10: Incredible hook, hilarious, clear conflict/story, pure dankness.
+1/10: Boring, overly political, hateful, random statements with no story.
 
-STRICT REJECTION (Return null if no thread passes):
-- No clear story or situation
-- Just a random question or boring statement
-- Hateful, overly political, or illegal content
-- NOT FUNNY OR DANK: If it's just sad or mundane, skip it.
-
-If NONE of the threads are truly perfect or hilarious, YOU MUST return null for selected_thread_id. Do not settle for a mediocre thread.
-
-Return ONLY valid JSON, no commentary:
+Return ONLY valid JSON:
 {{
-  "selected_thread_id": <integer id or null>,
-  "reason": "<one sentence: explain its funny/dank potential>",
-  "preview": "<2-sentence teaser hook for the video>"
+  "scores": [
+    {{"id": <int>, "score": <float>, "hook": "<1-sentence summary>"}}
+  ]
 }}"""
 
-    print("  [Scout] Analyzing threads (streaming)…")
-    cfg_model, cfg_temp = get_llm_settings()
-    model = model or cfg_model
     try:
-        response = ollama.chat(
+        response_p1 = ollama.chat(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt_p1}],
             format="json",
             options={"temperature": cfg_temp},
             stream=True
         )
         
-        full_text = ""
-        for chunk in response:
+        full_text_p1 = ""
+        for chunk in response_p1:
             content = chunk['message']['content']
-            full_text += content
+            full_text_p1 += content
             yield ("chunk", content)
             
-        raw = re.sub(r"```(?:json)?\s*|\s*```", "", full_text).strip()
-        data = json.loads(raw)
+        raw_p1 = re.sub(r"```(?:json)?\\s*|\\s*```", "", full_text_p1).strip()
+        data_p1 = json.loads(raw_p1)
         
-        tid = data.get("selected_thread_id")
-        if tid is not None:
-            valid_ids = {t["id"] for t in threads_data}
-            if tid not in valid_ids:
-                yield ("error", f"LLM returned invalid ID {tid}.")
-                return
-                
+        scores = data_p1.get("scores", [])
+        if not scores:
+            yield ("error", "Pass 1 failed to score threads.")
+            return
+
+        # Sort and get top 3
+        scores.sort(key=lambda x: x.get("score", 0), reverse=True)
+        top_candidates = scores[:3]
+        
+        yield ("chunk", "\\n\\n[Pass 2] Deep analysis of Top 3 candidates...\\n\\n")
+        
+        # ── Pass 2: Deep Analysis ──
+        valid_ids = {t["id"]: t for t in threads_data}
+        context_p2 = "\\n\\n".join(
+            f"ID:{c['id']} | PREV_SCORE:{c.get('score')} | REPLIES:{valid_ids[c['id']]['replies']}\\n{valid_ids[c['id']]['text']}"
+            for c in top_candidates if c["id"] in valid_ids
+        )
+        
+        prompt_p2 = f"""Out of the following top contenders, pick the ABSOLUTE BEST thread for a viral video.
+
+Contenders:
+{context_p2}
+
+Return ONLY valid JSON:
+{{
+  "selected_thread_id": <int>,
+  "reason": "<detailed reason why this beats the others>",
+  "preview": "<2-sentence teaser hook for the video>"
+}}"""
+
+        response_p2 = ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt_p2}],
+            format="json",
+            options={"temperature": cfg_temp},
+            stream=True
+        )
+
+        full_text_p2 = ""
+        for chunk in response_p2:
+            content = chunk['message']['content']
+            full_text_p2 += content
+            yield ("chunk", content)
+
+        raw_p2 = re.sub(r"```(?:json)?\\s*|\\s*```", "", full_text_p2).strip()
+        data_p2 = json.loads(raw_p2)
+        
+        best_id = data_p2.get("selected_thread_id")
+        
+        if best_id not in valid_ids:
+            best_id = top_candidates[0]["id"] if top_candidates else None
+            
+        leaderboard = [
+            {"id": c["id"], "score": c.get("score", 0), "hook": c.get("hook", "")}
+            for c in scores if c["id"] in valid_ids
+        ]
+
         yield ("result", {
-            "best_id": tid,
-            "reason": data.get("reason", ""),
-            "preview": data.get("preview", "")
+            "best_id": best_id,
+            "reason": data_p2.get("reason", "Highest rated overall."),
+            "preview": data_p2.get("preview", ""),
+            "leaderboard": leaderboard
         })
+
     except json.JSONDecodeError as e:
         yield ("error", f"JSON parse error: {e}")
     except Exception as e:
         yield ("error", str(e))
+
 
 
 def curate_and_censor_thread_stream(op_text: str, replies_data: list, model: str = None):

@@ -454,3 +454,42 @@ def api_delete_history(filename: str):
         os.remove(filepath)
         return {"status": "deleted"}
     raise HTTPException(status_code=404, detail="File not found")
+
+# ── P4: BATCH PIPELINE ENDPOINTS ─────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class BatchJobRequest(BaseModel):
+    board: str
+    amount: int
+    tts_voice: str
+    tts_rate: str
+    music_file: str
+    music_volume: float
+
+@app.post("/api/batch")
+def api_add_batch_job(req: BatchJobRequest):
+    """Adds a new rendering job to the automated batch queue."""
+    import batch
+    job_ids = []
+    # Queue up `amount` jobs using the provided config.
+    for _ in range(req.amount):
+        job_id = batch.add_batch_job(req.model_dump())
+        job_ids.append(job_id)
+    return {"status": "queued", "job_ids": job_ids}
+
+@app.get("/api/batch/status")
+def api_get_batch_status():
+    """Returns the current pending, running, and historical jobs from the queue."""
+    import batch
+    active_jobs = [job for job in batch.JOB_STATUS.values() if job["status"] in ("pending", "running")]
+    active_jobs.sort(key=lambda x: x["created_at"])
+    
+    historical = batch.JOB_HISTORY[-20:] # Return last 20 finished
+    historical.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    return {
+        "active": active_jobs,
+        "history": historical,
+        "queue_size": batch.BATCH_QUEUE.qsize()
+    }
