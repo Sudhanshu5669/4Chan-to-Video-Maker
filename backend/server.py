@@ -4,6 +4,8 @@ import glob
 import random
 import requests
 import asyncio
+import queue
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from pydantic import BaseModel
@@ -213,66 +215,100 @@ def api_get_thread_stream(board: str, thread_id: int):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-@app.post("/api/render")
-def api_render_video(req: RenderRequest):
-    bg_video = get_random_background()
-    if not bg_video:
-        raise HTTPException(status_code=400, detail="No video files found in assets/. Add at least one .mp4 file.")
+@app.post("/api/render_stream")
+def api_render_stream(req: RenderRequest):
+    import json
+    q = queue.Queue()
 
-    playlist = req.playlist
-    if not playlist:
-        raise HTTPException(status_code=400, detail="Playlist is empty")
-        
-    os.makedirs("temp", exist_ok=True)
-    os.makedirs("output", exist_ok=True)
-
-    args_list = [(i, req.board, req.thread_id, post) for i, post in enumerate(playlist)]
-    results = {}
-    
-    with ThreadPoolExecutor(max_workers=min(4, len(playlist))) as pool:
-        futures = {pool.submit(generate_scene, a): a[0] for a in args_list}
-        for fut in as_completed(futures):
-            try:
-                idx, img, audio = fut.result()
-                results[idx] = (img, audio)
-            except Exception as exc:
-                print(f"Scene error: {exc}")
-
-    ordered_imgs = []
-    ordered_audios = []
-    for i in range(len(playlist)):
-        if i in results:
-            img, audio = results[i]
-            ordered_imgs.append(img)
-            ordered_audios.append(audio)
-
-    if not ordered_imgs:
-        raise HTTPException(status_code=500, detail="No scenes generated successfully.")
-
-    out = f"output/shorts_{req.thread_id}.mp4"
-    try:
-        make_video(bg_video, ordered_imgs, ordered_audios, out)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rendering failed: {e}")
-
-    # YouTube upload if requested
-    uploaded = False
-    if req.upload_to_youtube:
+    def worker():
         try:
-            upload_to_youtube(
-                video_path=out,
-                title=req.title,
-                description=req.description,
-                tags=["4chan", "greentext", "reddit stories", "shorts", "tiktok"],
-                privacy="public"
-            )
-            uploaded = True
-        except Exception as e:
-            print(f"Upload failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Rendering worked but upload failed: {e}")
+            q.put({"type": "progress", "status": "Initializing render process...", "progress": 2})
 
-    return {
-        "status": "success",
-        "file": out,
-        "uploaded": uploaded
-    }
+            bg_video = get_random_background()
+            if not bg_video:
+                raise Exception("No video files found in assets/. Add at least one .mp4 file.")
+
+            playlist = req.playlist
+            if not playlist:
+                raise Exception("Playlist is empty.")
+                
+            os.makedirs("temp", exist_ok=True)
+            os.makedirs("output", exist_ok=True)
+
+            q.put({"type": "progress", "status": "Generating scenes and TTS audio...", "progress": 5})
+
+            args_list = [(i, req.board, req.thread_id, post) for i, post in enumerate(playlist)]
+            results = {}
+            
+            total_scenes = len(playlist)
+            completed_scenes = 0
+            
+            with ThreadPoolExecutor(max_workers=min(4, max(1, total_scenes))) as pool:
+                futures = {pool.submit(generate_scene, a): a[0] for a in args_list}
+                for fut in as_completed(futures):
+                    try:
+                        idx, img, audio = fut.result()
+                        results[idx] = (img, audio)
+                    except Exception as exc:
+                        print(f"Scene error: {exc}")
+                    completed_scenes += 1
+                    prog = 5 + int((completed_scenes / total_scenes) * 40)
+                    q.put({"type": "progress", "status": f"Generated scene {completed_scenes}/{total_scenes}", "progress": prog})
+
+            ordered_imgs = []
+            ordered_audios = []
+            for i in range(total_scenes):
+                if i in results:
+                    img, audio = results[i]
+                    ordered_imgs.append(img)
+                    ordered_audios.append(audio)
+
+            if not ordered_imgs:
+                raise Exception("No scenes generated successfully.")
+
+            out = f"output/shorts_{req.thread_id}.mp4"
+            
+            q.put({"type": "progress", "status": "Encoding final video... (this will take a few minutes)", "progress": 50})
+            make_video(bg_video, ordered_imgs, ordered_audios, out)
+            
+            uploaded = False
+            if req.upload_to_youtube:
+                q.put({"type": "progress", "status": "Uploading to YouTube...", "progress": 80})
+                
+                # Enforce fallback titles if user skipped them
+                video_title = req.title.strip() if req.title.strip() else f"4chan /{req.board}/ is actually unhinged 💀"
+                video_description = req.description.strip() if req.description.strip() else f"They really said that... \n\n#4chan #greentext #{req.board} #redditstories #shorts"
+                
+                def yt_progress(pct):
+                    q.put({"type": "progress", "status": f"Uploading to YouTube... {int(pct*100)}%", "progress": 80 + int(pct * 19)})
+
+                upload_to_youtube(
+                    video_path=out,
+                    title=video_title,
+                    description=video_description,
+                    tags=["4chan", "greentext", "reddit stories", "shorts", "tiktok"],
+                    privacy="public",
+                    progress_callback=yt_progress
+                )
+                uploaded = True
+
+            q.put({"type": "progress", "status": "Done!", "progress": 100})
+            q.put({"type": "result", "file": out, "uploaded": uploaded})
+        except Exception as str_err:
+            q.put({"type": "error", "error": str(str_err)})
+
+    def generate():
+        thread = threading.Thread(target=worker)
+        thread.start()
+        while True:
+            msg = q.get()
+            if msg["type"] == "progress":
+                yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+            elif msg["type"] == "result":
+                yield f"event: result\ndata: {json.dumps(msg)}\n\n"
+                break
+            elif msg["type"] == "error":
+                yield f"event: error\ndata: {json.dumps(msg)}\n\n"
+                break
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

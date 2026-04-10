@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { ArrowRight, Check, Trash2, Plus, MonitorPlay, Settings, Youtube, Loader2, RefreshCw, Layers, Terminal, ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowRight, Check, Trash2, Plus, MonitorPlay, Settings, Youtube, Loader2, RefreshCw, Layers, Terminal, ArrowUp, ArrowDown, List, Zap, Edit3 } from 'lucide-react';
 import './index.css';
 
 function App() {
   const [step, setStep] = useState('board');
+  const [mode, setMode] = useState('review'); // 'review', 'manual', 'auto'
   const [loading, setLoading] = useState(false);
   const [boards, setBoards] = useState([]);
   const [selectedBoard, setSelectedBoard] = useState('');
 
   const [candidates, setCandidates] = useState([]);
+  const [catalogPage, setCatalogPage] = useState(0);
   const [selectedThread, setSelectedThread] = useState(null);
 
   const [playlist, setPlaylist] = useState([]);
   const [otherReplies, setOtherReplies] = useState([]);
   const [page, setPage] = useState(1);
-  const itemsPerPage = 5;
+  const itemsPerPage = 25;
 
   const [renderSettings, setRenderSettings] = useState({
     title: '',
@@ -24,6 +26,8 @@ function App() {
   });
 
   const [renderResult, setRenderResult] = useState(null);
+  const [renderProgressValue, setRenderProgressValue] = useState(0);
+  const [renderProgressStatus, setRenderProgressStatus] = useState('');
 
   // Streaming State
   const [streamingText, setStreamingText] = useState('');
@@ -114,7 +118,7 @@ function App() {
 
         if (bestId) {
           setSelectedThread(bestId);
-          await loadThreadDataStream(selectedBoard, bestId);
+          await loadThreadDataStream(selectedBoard, bestId, true);
         } else {
           alert('Could not find a good thread.');
           setLoading(false);
@@ -129,7 +133,7 @@ function App() {
     }
   };
 
-  const loadThreadDataStream = async (board, threadId) => {
+  const loadThreadDataStream = async (board, threadId, autoStartRender = false) => {
     setStreamingText('');
     setStreamingStatus('Curating best replies...');
     try {
@@ -143,16 +147,78 @@ function App() {
 
       if (finalPayload) {
         const { op, selected_replies, other_replies } = finalPayload;
-        setPlaylist([op, ...selected_replies]);
+        const currentPlaylist = [op, ...selected_replies];
+        setPlaylist(currentPlaylist);
         setOtherReplies(other_replies);
-        setStep('review');
+
+        if (mode === 'auto' && autoStartRender) {
+          await startRenderDirect(board, threadId, currentPlaylist);
+        } else {
+          setStep('review');
+        }
       }
     } catch (err) {
       console.error(err);
       alert('Failed to load thread data');
     } finally {
+      if (mode !== 'auto' || !autoStartRender) {
+        setLoading(false);
+        setStreamingStatus('');
+      }
+    }
+  };
+
+  const fetchCatalog = async (board, pageNum) => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`http://localhost:8000/api/catalog/${board}?page=${pageNum}`);
+      setCandidates(res.data.candidates || []);
+      setCatalogPage(pageNum);
+      setStep('catalog');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to fetch catalog');
+    } finally {
       setLoading(false);
-      setStreamingStatus('');
+    }
+  };
+
+  const startRenderDirect = async (board, threadId, currentPlaylist) => {
+    setStep('render-progress');
+    setLoading(true);
+    setStreamingStatus('');
+    setRenderProgressValue(0);
+    setRenderProgressStatus('Preparing to render...');
+
+    try {
+      let finalResult = null;
+      await fetchStreamingEndpoint('http://localhost:8000/api/render_stream', {
+        board: board,
+        thread_id: threadId,
+        playlist: currentPlaylist,
+        title: renderSettings.title,
+        description: renderSettings.description,
+        upload_to_youtube: renderSettings.uploadToYoutube
+      },
+        (chunk) => {
+          if (chunk.progress !== undefined) {
+            setRenderProgressValue(chunk.progress);
+            setRenderProgressStatus(chunk.status);
+          }
+        },
+        (result) => { finalResult = result; }
+      );
+
+      if (finalResult && finalResult.file) {
+        setRenderResult(finalResult);
+        setStep('done');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Video generation failed: ' + err.message);
+      setStep('board');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -181,22 +247,35 @@ function App() {
 
   const startRender = async () => {
     setStep('render-progress');
+    setRenderProgressValue(0);
+    setRenderProgressStatus('Starting render process...');
+
     try {
-      const res = await axios.post('http://localhost:8000/api/render', {
+      let finalResult = null;
+      await fetchStreamingEndpoint('http://localhost:8000/api/render_stream', {
         board: selectedBoard,
         thread_id: selectedThread,
         playlist: playlist,
         title: renderSettings.title,
         description: renderSettings.description,
         upload_to_youtube: renderSettings.uploadToYoutube
-      });
-      if (res.data.status === 'success') {
-        setRenderResult(res.data);
+      },
+        (chunk) => {
+          if (chunk.progress !== undefined) {
+            setRenderProgressValue(chunk.progress);
+            setRenderProgressStatus(chunk.status);
+          }
+        },
+        (result) => { finalResult = result; }
+      );
+
+      if (finalResult && finalResult.file) {
+        setRenderResult(finalResult);
         setStep('done');
       }
     } catch (err) {
       console.error(err);
-      alert('Video generation failed: ' + (err.response?.data?.detail || err.message));
+      alert('Video generation failed: ' + err.message);
       setStep('review');
     }
   };
@@ -229,9 +308,6 @@ function App() {
           <div className="animate-fade-in" style={{ maxWidth: '600px', margin: '0 auto', width: '100%' }}>
             <div className="glass-card">
               <h2 style={{ marginBottom: '1rem' }} className="text-gradient">Select Target Board</h2>
-              <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-                The AI will scan the target board catalog to find the most engaging thread.
-              </p>
 
               <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
                 <select
@@ -245,15 +321,142 @@ function App() {
                   ))}
                 </select>
 
+                <div style={{ marginTop: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Select Mode:</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className={`btn-secondary ${mode === 'review' ? 'active-mode' : ''}`}
+                      style={{ flex: 1, border: mode === 'review' ? '2px solid var(--accent-primary)' : '' }}
+                      onClick={() => setMode('review')}
+                    >
+                      <Edit3 size={18} /> Review
+                    </button>
+                    <button
+                      className={`btn-secondary ${mode === 'manual' ? 'active-mode' : ''}`}
+                      style={{ flex: 1, border: mode === 'manual' ? '2px solid var(--accent-primary)' : '' }}
+                      onClick={() => setMode('manual')}
+                    >
+                      <List size={18} /> Manual
+                    </button>
+                    <button
+                      className={`btn-secondary ${mode === 'auto' ? 'active-mode' : ''}`}
+                      style={{ flex: 1, border: mode === 'auto' ? '2px solid var(--accent-primary)' : '' }}
+                      onClick={() => setMode('auto')}
+                    >
+                      <Zap size={18} /> Auto
+                    </button>
+                  </div>
+                </div>
+
                 <button
                   className="btn-primary"
-                  onClick={scoutBoard}
+                  onClick={() => {
+                    if (mode === 'manual') fetchCatalog(selectedBoard, 0);
+                    else if (mode === 'auto') setStep('render-setup-auto');
+                    else scoutBoard();
+                  }}
                   disabled={!selectedBoard || loading}
                   style={{ marginTop: '1rem' }}
                 >
-                  {loading ? <Loader2 className="animate-spin" /> : <MonitorPlay />}
-                  {loading ? 'AI is Scouting...' : 'Scout & Curate Thread'}
+                  {loading ? <Loader2 className="animate-spin" /> : (mode === 'manual' ? <List /> : (mode === 'auto' ? <Zap /> : <MonitorPlay />))}
+                  {loading ? 'Processing...' : (mode === 'manual' ? 'Browse Catalog' : (mode === 'auto' ? 'Configure Auto-Render' : 'Scout & Curate Thread'))}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'catalog' && (
+          <div className="animate-fade-in" style={{ maxWidth: '800px', margin: '0 auto', width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+              <div>
+                <h2 className="text-gradient">Catalog Browser</h2>
+                <p style={{ color: 'var(--text-secondary)' }}>/{selectedBoard}/ - Page {catalogPage + 1}</p>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn-secondary" onClick={() => fetchCatalog(selectedBoard, catalogPage > 0 ? catalogPage - 1 : 0)} disabled={catalogPage === 0 || loading}>Prev Page</button>
+                <button className="btn-secondary" onClick={() => fetchCatalog(selectedBoard, catalogPage + 1)} disabled={loading || candidates.length < 10}>Next Page</button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {candidates.length > 0 ? candidates.map(c => (
+                <div key={c.id} className="glass-card" style={{ cursor: 'pointer', transition: 'all 0.2s', padding: '1rem' }} onClick={() => {
+                  setSelectedThread(c.id);
+                  setLoading(true);
+                  loadThreadDataStream(selectedBoard, c.id, false);
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{ fontWeight: 'bold', color: 'var(--accent-primary)' }}>Thread {c.id}</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{c.replies} replies</span>
+                  </div>
+                  <p>{c.text}</p>
+                </div>
+              )) : (
+                <div className="flex-center" style={{ padding: '3rem', color: 'var(--text-secondary)' }}>No candidates found on this page.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === 'render-setup-auto' && (
+          <div className="animate-fade-in" style={{ maxWidth: '600px', margin: '0 auto', width: '100%' }}>
+            <div className="glass-card">
+              <h2 className="text-gradient" style={{ marginBottom: '1.5rem' }}>Auto-Render Settings</h2>
+              <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+                The AI will automatically scout the best thread, curate it, and render the video using these settings.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                    YouTube Title
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={`4chan /${selectedBoard}/ is actually unhinged 💀`}
+                    value={renderSettings.title}
+                    onChange={e => setRenderSettings({ ...renderSettings, title: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                    Description
+                  </label>
+                  <textarea
+                    rows={4}
+                    placeholder="They really said that... #shorts"
+                    value={renderSettings.description}
+                    onChange={e => setRenderSettings({ ...renderSettings, description: e.target.value })}
+                  ></textarea>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px' }}>
+                  <div className="flex-center gap-2">
+                    <Youtube color="#ff0000" size={24} />
+                    <span style={{ fontWeight: '600' }}>Auto-Upload to YouTube</span>
+                  </div>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={renderSettings.uploadToYoutube}
+                      onChange={e => setRenderSettings({ ...renderSettings, uploadToYoutube: e.target.checked })}
+                    />
+                    <span className="slider"></span>
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                  <button className="btn-secondary" onClick={() => setStep('board')} style={{ flex: 1 }}>
+                    Back
+                  </button>
+                  <button className="btn-primary" onClick={() => {
+                    scoutBoard();
+                  }} style={{ flex: 2 }}>
+                    <Zap /> Start Automation
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -286,14 +489,14 @@ function App() {
                       <div className="post-header">
                         <span className="post-id">{idx === 0 ? 'OP' : `Reply >>${post.id}`}</span>
                         {idx > 0 && (
-                           <div style={{ display: 'flex', gap: '0.2rem' }}>
-                             <button className="icon-button" onClick={() => moveReply(idx, 'up')} disabled={idx === 1} title="Move Up">
-                               <ArrowUp size={16} />
-                             </button>
-                             <button className="icon-button" onClick={() => moveReply(idx, 'down')} disabled={idx === playlist.length - 1} title="Move Down">
-                               <ArrowDown size={16} />
-                             </button>
-                           </div>
+                          <div style={{ display: 'flex', gap: '0.2rem' }}>
+                            <button className="icon-button" onClick={() => moveReply(idx, 'up')} disabled={idx === 1} title="Move Up">
+                              <ArrowUp size={16} />
+                            </button>
+                            <button className="icon-button" onClick={() => moveReply(idx, 'down')} disabled={idx === playlist.length - 1} title="Move Down">
+                              <ArrowDown size={16} />
+                            </button>
+                          </div>
                         )}
                       </div>
                       <div className="post-text">{post.text}</div>
@@ -407,12 +610,20 @@ function App() {
 
         {step === 'render-progress' && (
           <div className="animate-fade-in flex-center" style={{ flexDirection: 'column', height: '100%' }}>
-            <div className="glass-card" style={{ textAlign: 'center', padding: '4rem' }}>
-              <Loader2 size={64} className="animate-spin text-gradient" style={{ margin: '0 auto 2rem' }} />
-              <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Rendering Video...</h2>
-              <p style={{ color: 'var(--text-secondary)' }}>
-                This entails screenshotting, TTS generation, and video composition. <br />
-                Please wait. This might take a few minutes.
+            <div className="glass-card" style={{ textAlign: 'center', padding: '4rem', width: '100%', maxWidth: '500px' }}>
+              <MonitorPlay size={48} className="text-gradient" style={{ margin: '0 auto 1.5rem', display: 'block' }} />
+              <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Rendering Video</h2>
+
+              <div className="progress-container">
+                <div className="progress-fill" style={{ width: `${renderProgressValue}%` }}></div>
+              </div>
+
+              <div className="progress-status text-gradient">
+                {renderProgressStatus} ({renderProgressValue}%)
+              </div>
+
+              <p style={{ color: 'var(--text-secondary)', marginTop: '2rem', fontSize: '0.9rem' }}>
+                Please do not close this window.
               </p>
             </div>
           </div>

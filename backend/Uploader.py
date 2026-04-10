@@ -33,7 +33,7 @@ def authenticate_youtube():
             
     return googleapiclient.discovery.build("youtube", "v3", credentials=credentials)
 
-def upload_to_youtube(video_path, title, description, tags, category_id="24", privacy="private"):
+def upload_to_youtube(video_path, title, description, tags, category_id="24", privacy="private", progress_callback=None):
     """
     Uploads a video to YouTube.
     Category 24 = Entertainment, 20 = Gaming, 22 = Blogs
@@ -71,7 +71,14 @@ def upload_to_youtube(video_path, title, description, tags, category_id="24", pr
     response = None
     try:
         print("[YouTube API] Uploading video... (this may take a few minutes)")
-        response = request.execute()
+        while response is None:
+            status, response = request.next_chunk()
+            if status:
+                progress_pct = int(status.progress() * 100)
+                print(f"Uploaded {progress_pct}%.")
+                if progress_callback:
+                    progress_callback(status.progress())
+                    
         print(f"\n✅ SUCCESS! Video uploaded to YouTube.")
         print(f"🔗 Link: https://youtu.be/{response['id']}")
         return response['id']
