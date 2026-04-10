@@ -134,3 +134,137 @@ Return ONLY valid JSON:
     ]
 
     return data
+
+
+def scout_best_thread_stream(threads_data: list, model: str = DEFAULT_MODEL):
+    """
+    Streaming version of scout_best_thread. Yields ("chunk", text) and finally ("result", dict) or ("error", str).
+    """
+    context = "\n".join(
+        f"ID:{t['id']} REPLIES:{t['replies']}\n{t['text']}"
+        for t in threads_data
+    )
+
+    prompt = f"""You are a YouTube Shorts producer. Pick ONE thread below that would make the most viral 30-60 second video.
+
+THREADS:
+{context}
+
+VIRAL CRITERIA (score each internally, pick highest total):
+- Strong hook: does the opening line grab attention instantly?
+- Clear situation: is there an actual story, conflict, or scenario?
+- Emotional reaction: funny, shocking, relatable, or cringe?
+- Payoff: is there a satisfying punchline or twist?
+- Broad appeal: would a general audience (not just 4chan users) get it?
+
+REJECT if:
+- No clear story or situation
+- Requires niche knowledge to understand
+- Hateful, political rant, or illegal content as the main focus
+- Just a question with no drama or humor
+
+Return ONLY valid JSON, no commentary:
+{{
+  "selected_thread_id": <integer id or null>,
+  "reason": "<one sentence: why this will go viral>",
+  "preview": "<2-sentence teaser hook for the video>"
+}}"""
+
+    print("  [Scout] Analyzing threads (streaming)…")
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            options={"temperature": 0.3},
+            stream=True
+        )
+        
+        full_text = ""
+        for chunk in response:
+            content = chunk['message']['content']
+            full_text += content
+            yield ("chunk", content)
+            
+        raw = re.sub(r"```(?:json)?\s*|\s*```", "", full_text).strip()
+        data = json.loads(raw)
+        
+        tid = data.get("selected_thread_id")
+        if tid is not None:
+            valid_ids = {t["id"] for t in threads_data}
+            if tid not in valid_ids:
+                yield ("error", f"LLM returned invalid ID {tid}.")
+                return
+                
+        yield ("result", {
+            "best_id": tid,
+            "reason": data.get("reason", ""),
+            "preview": data.get("preview", "")
+        })
+    except json.JSONDecodeError as e:
+        yield ("error", f"JSON parse error: {e}")
+    except Exception as e:
+        yield ("error", str(e))
+
+
+def curate_and_censor_thread_stream(op_text: str, replies_data: list, model: str = DEFAULT_MODEL):
+    """
+    Streaming version of curate_and_censor_thread.
+    """
+    replies_block = "\n".join(f"ID {r['id']}: {r['text']}" for r in replies_data)
+
+    prompt = f"""You are a script editor for a viral YouTube Shorts channel. Edit the thread below into a clean, entertaining short-form video script.
+
+OP:
+{op_text}
+
+REPLIES:
+{replies_block}
+
+TASKS:
+1. Select 2 to 5 replies that ADD value — funny reactions, escalating drama, unexpected twists, or a satisfying punchline. Skip low-effort replies ("lol", "same", single words).
+2. Censor ALL profanity: replace the ENTIRE word with only its first letter (e.g. "fucking" → "f", "shit" → "s"). Never use asterisks. Catch plural/past-tense variants too.
+3. Fix obvious typos but keep the original voice and humor intact.
+4. Make sure the sequence reads like a short story from top to bottom.
+
+Return ONLY valid JSON:
+{{
+  "op_censored": "<cleaned OP>",
+  "selected_replies": [
+    {{"id": <int>, "censored_text": "<cleaned text>"}}
+  ]
+}}"""
+
+    print("  [Editor] Curating script (streaming)…")
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            options={"temperature": 0.3},
+            stream=True
+        )
+        
+        full_text = ""
+        for chunk in response:
+            content = chunk['message']['content']
+            full_text += content
+            yield ("chunk", content)
+            
+        raw = re.sub(r"```(?:json)?\s*|\s*```", "", full_text).strip()
+        data = json.loads(raw)
+        
+        replies = data.get("selected_replies", [])
+        if len(replies) > 5:
+            data["selected_replies"] = replies[:5]
+
+        valid_ids = {r["id"] for r in replies_data}
+        data["selected_replies"] = [
+            r for r in data["selected_replies"]
+            if isinstance(r.get("id"), int) and r["id"] in valid_ids
+            and r.get("censored_text", "").strip()
+        ]
+        
+        yield ("result", data)
+    except Exception as e:
+        yield ("error", str(e))
