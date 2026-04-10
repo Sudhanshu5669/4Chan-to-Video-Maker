@@ -3,20 +3,23 @@ import json
 import re
 import time
 
-# Change this to any model you have pulled locally.
-# llama3.1:8b or mistral:7b handle JSON instructions far better than vision models for text tasks.
-DEFAULT_MODEL = "llama3.1:8b"
+from config import load_config
 
+def get_llm_settings():
+    config = load_config()
+    return config.get("llm_model", "llama3.1:8b"), float(config.get("llm_temperature", 0.3))
 
-def _call_ollama(prompt: str, model: str, retries: int = 3) -> dict | None:
+def _call_ollama(prompt: str, model: str = None, retries: int = 3) -> dict | None:
     """Calls ollama with retry logic and robust JSON extraction."""
+    cfg_model, cfg_temp = get_llm_settings()
+    model = model or cfg_model
     for attempt in range(1, retries + 1):
         try:
             response = ollama.chat(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 format="json",
-                options={"temperature": 0.3},   # lower temp = more consistent JSON
+                options={"temperature": cfg_temp},
             )
             raw = response["message"]["content"]
             # Strip any accidental markdown fences
@@ -30,7 +33,7 @@ def _call_ollama(prompt: str, model: str, retries: int = 3) -> dict | None:
     return None
 
 
-def scout_best_thread(threads_data: list, model: str = DEFAULT_MODEL):
+def scout_best_thread(threads_data: list, model: str = None):
     """
     Picks the single best thread for a viral YouTube Short.
     Returns (thread_id | None, reason: str, preview: str).
@@ -40,28 +43,29 @@ def scout_best_thread(threads_data: list, model: str = DEFAULT_MODEL):
         for t in threads_data
     )
 
-    prompt = f"""You are a YouTube Shorts producer. Pick ONE thread below that would make the most viral 30-60 second video.
+    prompt = f"""You are a YouTube Shorts producer looking for extremely viral, funny, and dank 4chan threads. Review the threads below. Your goal is to pick the PERFECT thread with high comedic or dank potential.
 
 THREADS:
 {context}
 
 VIRAL CRITERIA (score each internally, pick highest total):
+- Dank & Comedic: Is it genuinely funny, absurd, or unexpectedly hilarious?
 - Strong hook: does the opening line grab attention instantly?
 - Clear situation: is there an actual story, conflict, or scenario?
-- Emotional reaction: funny, shocking, relatable, or cringe?
 - Payoff: is there a satisfying punchline or twist?
-- Broad appeal: would a general audience (not just 4chan users) get it?
 
-REJECT if:
+STRICT REJECTION (Return null if no thread passes):
 - No clear story or situation
-- Requires niche knowledge to understand
-- Hateful, political rant, or illegal content as the main focus
-- Just a question with no drama or humor
+- Just a random question or boring statement
+- Hateful, overly political, or illegal content
+- NOT FUNNY OR DANK: If it's just sad or mundane, skip it.
+
+If NONE of the threads are truly perfect or hilarious, YOU MUST return null for selected_thread_id. Do not settle for a mediocre thread.
 
 Return ONLY valid JSON, no commentary:
 {{
   "selected_thread_id": <integer id or null>,
-  "reason": "<one sentence: why this will go viral>",
+  "reason": "<one sentence: explain its funny/dank potential>",
   "preview": "<2-sentence teaser hook for the video>"
 }}"""
 
@@ -85,7 +89,7 @@ Return ONLY valid JSON, no commentary:
     )
 
 
-def curate_and_censor_thread(op_text: str, replies_data: list, model: str = DEFAULT_MODEL) -> dict | None:
+def curate_and_censor_thread(op_text: str, replies_data: list, model: str = None) -> dict | None:
     """
     Selects the best 1-5 replies and censors profanity.
     Returns {"op_censored": str, "selected_replies": [{"id": int, "censored_text": str}]}
@@ -136,7 +140,7 @@ Return ONLY valid JSON:
     return data
 
 
-def scout_best_thread_stream(threads_data: list, model: str = DEFAULT_MODEL):
+def scout_best_thread_stream(threads_data: list, model: str = None):
     """
     Streaming version of scout_best_thread. Yields ("chunk", text) and finally ("result", dict) or ("error", str).
     """
@@ -145,38 +149,41 @@ def scout_best_thread_stream(threads_data: list, model: str = DEFAULT_MODEL):
         for t in threads_data
     )
 
-    prompt = f"""You are a YouTube Shorts producer. Pick ONE thread below that would make the most viral 30-60 second video.
+    prompt = f"""You are a YouTube Shorts producer looking for extremely viral, funny, and dank 4chan threads. Review the threads below. Your goal is to pick the PERFECT thread with high comedic or dank potential.
 
 THREADS:
 {context}
 
 VIRAL CRITERIA (score each internally, pick highest total):
+- Dank & Comedic: Is it genuinely funny, absurd, or unexpectedly hilarious?
 - Strong hook: does the opening line grab attention instantly?
 - Clear situation: is there an actual story, conflict, or scenario?
-- Emotional reaction: funny, shocking, relatable, or cringe?
 - Payoff: is there a satisfying punchline or twist?
-- Broad appeal: would a general audience (not just 4chan users) get it?
 
-REJECT if:
+STRICT REJECTION (Return null if no thread passes):
 - No clear story or situation
-- Requires niche knowledge to understand
-- Hateful, political rant, or illegal content as the main focus
-- Just a question with no drama or humor
+- Just a random question or boring statement
+- Hateful, overly political, or illegal content
+- NOT FUNNY OR DANK: If it's just sad or mundane, skip it.
+
+If NONE of the threads are truly perfect or hilarious, YOU MUST return null for selected_thread_id. Do not settle for a mediocre thread.
 
 Return ONLY valid JSON, no commentary:
 {{
   "selected_thread_id": <integer id or null>,
-  "reason": "<one sentence: why this will go viral>",
+  "reason": "<one sentence: explain its funny/dank potential>",
   "preview": "<2-sentence teaser hook for the video>"
 }}"""
 
     print("  [Scout] Analyzing threads (streaming)…")
+    cfg_model, cfg_temp = get_llm_settings()
+    model = model or cfg_model
     try:
         response = ollama.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             format="json",
-            options={"temperature": 0.3},
+            options={"temperature": cfg_temp},
             stream=True
         )
         
@@ -207,7 +214,7 @@ Return ONLY valid JSON, no commentary:
         yield ("error", str(e))
 
 
-def curate_and_censor_thread_stream(op_text: str, replies_data: list, model: str = DEFAULT_MODEL):
+def curate_and_censor_thread_stream(op_text: str, replies_data: list, model: str = None):
     """
     Streaming version of curate_and_censor_thread.
     """
@@ -236,12 +243,14 @@ Return ONLY valid JSON:
 }}"""
 
     print("  [Editor] Curating script (streaming)…")
+    cfg_model, cfg_temp = get_llm_settings()
+    model = model or cfg_model
     try:
         response = ollama.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             format="json",
-            options={"temperature": 0.3},
+            options={"temperature": cfg_temp},
             stream=True
         )
         

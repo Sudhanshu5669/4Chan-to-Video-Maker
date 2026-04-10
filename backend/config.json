@@ -1,0 +1,9 @@
+{
+  "llm_model": "llama3.1:8b",
+  "llm_temperature": 0.3,
+  "tts_voice": "en-US-ChristopherNeural",
+  "tts_rate": "+15%",
+  "max_replies": 5,
+  "video_fps": 30,
+  "video_preset": "fast"
+}

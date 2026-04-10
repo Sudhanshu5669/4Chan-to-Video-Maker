@@ -1,3 +1,4 @@
+import os
 from playwright.sync_api import sync_playwright
 
 # ── Injected CSS: clean card design with high-contrast, readable text ─────────
@@ -102,11 +103,78 @@ body {
 .highlight-card .quote { color: #8fef8f !important; }
 """
 
+
+def _do_capture(page, post_id, replacement_text, output_path):
+    """Internal: isolate and screenshot a single post on an already-loaded page."""
+    selector = f"#pc{post_id}"
+
+    # Isolate the target post and force it visible regardless of page CSS
+    page.evaluate(f"""
+        const el = document.querySelector('{selector}');
+        if (el) {{
+            el.classList.add('highlight-card');
+            el.style.cssText += '; display:block !important; visibility:visible !important; opacity:1 !important;';
+            document.querySelectorAll('.postContainer').forEach(p => {{
+                if (p !== el) p.style.display = 'none';
+            }});
+        }}
+    """)
+
+    # Inject censored text
+    if replacement_text:
+        safe = (
+            replacement_text
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "<br>")
+        )
+        page.evaluate(f"""
+            const msg = document.querySelector('{selector} .postMessage')
+                     || document.querySelector('{selector} blockquote');
+            if (msg) msg.innerHTML = '{safe}';
+        """)
+
+    # Let the layout settle after our DOM surgery and image loading
+    page.wait_for_timeout(800)
+
+    # Get bounding box via JS — bypasses all playwright visibility checks
+    bbox = page.evaluate("""
+        (() => {
+            const el = document.querySelector('""" + selector + """');
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: r.left, y: r.top, width: r.width, height: r.height };
+        })()
+    """)
+
+    if not bbox or bbox["width"] == 0 or bbox["height"] == 0:
+        return False
+
+    # Expand viewport so the element is never clipped
+    page.set_viewport_size({
+        "width":  max(500, int(bbox["x"] + bbox["width"])  + 20),
+        "height": max(200, int(bbox["y"] + bbox["height"]) + 20),
+    })
+
+    page.screenshot(
+        path=output_path,
+        clip={
+            "x":      bbox["x"],
+            "y":      bbox["y"],
+            "width":  bbox["width"],
+            "height": bbox["height"],
+        },
+        scale="device",
+    )
+    return True
+
+
 def capture_post(board: str, thread_id: int, post_id: int,
                  output_path: str, replacement_text: str | None = None):
     """
     Navigates to the thread, isolates a single post as a styled card,
     injects censored text if provided, and screenshots it.
+    Launches its own browser — use capture_posts_batch() for multiple posts.
     """
     url = f"https://boards.4chan.org/{board}/thread/{thread_id}"
 
@@ -125,70 +193,72 @@ def capture_post(board: str, thread_id: int, post_id: int,
         page.goto(url, wait_until="load", timeout=30_000)
         page.add_style_tag(content=CARD_CSS)
 
-        selector = f"#pc{post_id}"
-
-        # Isolate the target post and force it visible regardless of page CSS
-        page.evaluate(f"""
-            const el = document.querySelector('{selector}');
-            if (el) {{
-                el.classList.add('highlight-card');
-                // Force the card itself visible
-                el.style.cssText += '; display:block !important; visibility:visible !important; opacity:1 !important;';
-                // Hide everything else
-                document.querySelectorAll('.postContainer').forEach(p => {{
-                    if (p !== el) p.style.display = 'none';
-                }});
-            }}
-        """)
-
-        # Inject censored text
-        if replacement_text:
-            safe = (
-                replacement_text
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\n", "<br>")
-            )
-            page.evaluate(f"""
-                const msg = document.querySelector('{selector} .postMessage')
-                         || document.querySelector('{selector} blockquote');
-                if (msg) msg.innerHTML = '{safe}';
-            """)
-
-        # Let the layout settle after our DOM surgery and image loading
-        page.wait_for_timeout(800)
-
-        # Get bounding box via JS — bypasses all playwright visibility checks
-        bbox = page.evaluate("""
-            (() => {
-                const el = document.querySelector('""" + selector + """');
-                if (!el) return null;
-                const r = el.getBoundingClientRect();
-                return { x: r.left, y: r.top, width: r.width, height: r.height };
-            })()
-        """)
-
-        if not bbox or bbox["width"] == 0 or bbox["height"] == 0:
+        success = _do_capture(page, post_id, replacement_text, output_path)
+        if not success:
             raise RuntimeError(
                 f"Could not get bounding box for post {post_id} — element may not exist in thread."
             )
 
-        # Expand viewport so the element is never clipped
-        page.set_viewport_size({
-            "width":  max(500, int(bbox["x"] + bbox["width"])  + 20),
-            "height": max(200, int(bbox["y"] + bbox["height"]) + 20),
-        })
+        browser.close()
 
-        # page.screenshot(clip=...) captures raw pixels
-        page.screenshot(
-            path=output_path,
-            clip={
-                "x":      bbox["x"],
-                "y":      bbox["y"],
-                "width":  bbox["width"],
-                "height": bbox["height"],
-            },
-            scale="device",
-        )
+
+def capture_posts_batch(board: str, thread_id: int, posts: list,
+                        output_dir: str = "temp", progress_callback=None):
+    """
+    Captures screenshots of multiple posts using a SINGLE browser instance.
+    Significantly faster than calling capture_post() for each post individually,
+    as the Chromium process is only launched once.
+
+    Args:
+        board: 4chan board name (e.g. 'g')
+        thread_id: thread number
+        posts: list of dicts with 'id' and optional 'text' keys
+        output_dir: directory to save screenshots
+        progress_callback: optional fn(completed: int, total: int) for progress
+
+    Returns:
+        list of (index, img_path) tuples for successful captures
+    """
+    url = f"https://boards.4chan.org/{board}/thread/{thread_id}"
+    os.makedirs(output_dir, exist_ok=True)
+    results = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+
+        for idx, post in enumerate(posts):
+            post_id = post["id"]
+            replacement_text = post.get("text")
+            img_path = os.path.join(output_dir, f"post_{post_id}.png")
+
+            try:
+                context = browser.new_context(
+                    viewport={"width": 500, "height": 900},
+                    device_scale_factor=2,
+                )
+                page = context.new_page()
+                page.route("**/ads/**", lambda r: r.abort())
+                page.goto(url, wait_until="load", timeout=30_000)
+                page.add_style_tag(content=CARD_CSS)
+
+                success = _do_capture(page, post_id, replacement_text, img_path)
+                if success:
+                    results.append((idx, img_path))
+                else:
+                    print(f"  [Screenshot] Warning: Could not capture post {post_id}")
+
+                context.close()
+
+            except Exception as e:
+                print(f"  [Screenshot] Error capturing post {post_id}: {e}")
+                try:
+                    context.close()
+                except Exception:
+                    pass
+
+            if progress_callback:
+                progress_callback(idx + 1, len(posts))
 
         browser.close()
+
+    return results

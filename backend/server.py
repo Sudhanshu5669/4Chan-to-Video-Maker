@@ -10,11 +10,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from Uploader import upload_to_youtube
 from scraper import get_catalog_page_candidates, clean_text, get_all_boards
-from screenshot import capture_post
+from screenshot import capture_post, capture_posts_batch
 from tts import generate_tts
 from video import make_video
 from llm import curate_and_censor_thread, scout_best_thread
@@ -52,6 +52,10 @@ class RenderRequest(BaseModel):
     title: str = ""
     description: str = ""
     upload_to_youtube: bool = False
+    tts_rate: str = "+15%"
+    tts_voice: str = "en-US-ChristopherNeural"
+    music_file: str = ""
+    music_volume: float = 0.15
 
 # ─────────────────────────────────────────────
 #  HELPERS FROM MAIN.PY (COPIED/MODIFIED)
@@ -235,50 +239,85 @@ def api_render_stream(req: RenderRequest):
             os.makedirs("temp", exist_ok=True)
             os.makedirs("output", exist_ok=True)
 
-            q.put({"type": "progress", "status": "Generating scenes and TTS audio...", "progress": 5})
+            # ── Phase 1: Batch Screenshots (single browser instance) ──
+            q.put({"type": "progress", "status": "Capturing post screenshots...", "progress": 5})
 
-            args_list = [(i, req.board, req.thread_id, post) for i, post in enumerate(playlist)]
-            results = {}
-            
-            total_scenes = len(playlist)
-            completed_scenes = 0
-            
-            with ThreadPoolExecutor(max_workers=min(4, max(1, total_scenes))) as pool:
-                futures = {pool.submit(generate_scene, a): a[0] for a in args_list}
+            def on_screenshot_progress(done, total):
+                prog = 5 + int((done / total) * 20)
+                q.put({"type": "progress", "status": f"Captured screenshot {done}/{total}", "progress": prog})
+
+            screenshot_results = capture_posts_batch(
+                req.board, req.thread_id, playlist,
+                output_dir="temp",
+                progress_callback=on_screenshot_progress
+            )
+
+            if not screenshot_results:
+                raise Exception("No screenshots captured successfully.")
+
+            # ── Phase 2: Parallel TTS Generation ──
+            q.put({"type": "progress", "status": "Generating voiceover audio...", "progress": 28})
+
+            tts_rate = req.tts_rate
+            tts_voice = req.tts_voice
+            total_tts = len(playlist)
+            completed_tts = 0
+
+            with ThreadPoolExecutor(max_workers=min(4, max(1, total_tts))) as pool:
+                futures = {}
+                for post in playlist:
+                    audio_path = f"temp/audio_{post['id']}.mp3"
+                    fut = pool.submit(generate_tts, post['text'], audio_path, voice=tts_voice, rate=tts_rate)
+                    futures[fut] = (post['id'], audio_path)
+
                 for fut in as_completed(futures):
+                    pid, apath = futures[fut]
                     try:
-                        idx, img, audio = fut.result()
-                        results[idx] = (img, audio)
-                    except Exception as exc:
-                        print(f"Scene error: {exc}")
-                    completed_scenes += 1
-                    prog = 5 + int((completed_scenes / total_scenes) * 40)
-                    q.put({"type": "progress", "status": f"Generated scene {completed_scenes}/{total_scenes}", "progress": prog})
+                        fut.result()
+                    except Exception as e:
+                        print(f"  [TTS] Error for post {pid}: {e}")
+                    completed_tts += 1
+                    prog = 28 + int((completed_tts / total_tts) * 17)
+                    q.put({"type": "progress", "status": f"Generated audio {completed_tts}/{total_tts}", "progress": prog})
 
+            # ── Phase 3: Assemble ordered media ──
             ordered_imgs = []
             ordered_audios = []
-            for i in range(total_scenes):
-                if i in results:
-                    img, audio = results[i]
-                    ordered_imgs.append(img)
-                    ordered_audios.append(audio)
+            for post in playlist:
+                pid = post['id']
+                img_path = f"temp/post_{pid}.png"
+                audio_path = f"temp/audio_{pid}.mp3"
+                if os.path.exists(img_path) and os.path.exists(audio_path):
+                    ordered_imgs.append(img_path)
+                    ordered_audios.append(audio_path)
 
             if not ordered_imgs:
                 raise Exception("No scenes generated successfully.")
 
+            # ── Phase 4: Render Video ──
             out = f"output/shorts_{req.thread_id}.mp4"
-            
-            q.put({"type": "progress", "status": "Encoding final video... (this will take a few minutes)", "progress": 50})
-            make_video(bg_video, ordered_imgs, ordered_audios, out)
-            
+            q.put({"type": "progress", "status": "Encoding final video... (this may take a few minutes)", "progress": 50})
+            from config import load_config
+            cfg = load_config()
+            v_fps = int(cfg.get("video_fps", 30))
+            v_preset = cfg.get("video_preset", "fast")
+
+            make_video(
+                bg_video, ordered_imgs, ordered_audios, out,
+                music_path=os.path.join("assets", "music", req.music_file) if req.music_file else None,
+                music_volume=req.music_volume,
+                fps=v_fps,
+                preset=v_preset
+            )
+
+            # ── Phase 5: YouTube Upload (optional) ──
             uploaded = False
             if req.upload_to_youtube:
                 q.put({"type": "progress", "status": "Uploading to YouTube...", "progress": 80})
-                
-                # Enforce fallback titles if user skipped them
+
                 video_title = req.title.strip() if req.title.strip() else f"4chan /{req.board}/ is actually unhinged 💀"
                 video_description = req.description.strip() if req.description.strip() else f"They really said that... \n\n#4chan #greentext #{req.board} #redditstories #shorts"
-                
+
                 def yt_progress(pct):
                     q.put({"type": "progress", "status": f"Uploading to YouTube... {int(pct*100)}%", "progress": 80 + int(pct * 19)})
 
@@ -292,6 +331,14 @@ def api_render_stream(req: RenderRequest):
                 )
                 uploaded = True
 
+            # ── Phase 6: Cleanup temp files ──
+            q.put({"type": "progress", "status": "Cleaning up...", "progress": 99})
+            for f in glob.glob("temp/post_*.png") + glob.glob("temp/audio_*.mp3"):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
             q.put({"type": "progress", "status": "Done!", "progress": 100})
             q.put({"type": "result", "file": out, "uploaded": uploaded})
         except Exception as str_err:
@@ -303,7 +350,7 @@ def api_render_stream(req: RenderRequest):
         while True:
             msg = q.get()
             if msg["type"] == "progress":
-                yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+                yield f"event: chunk\ndata: {json.dumps(msg)}\n\n"
             elif msg["type"] == "result":
                 yield f"event: result\ndata: {json.dumps(msg)}\n\n"
                 break
@@ -312,3 +359,98 @@ def api_render_stream(req: RenderRequest):
                 break
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ─────────────────────────────────────────────
+#  P2: ADDITIONAL ENDPOINTS
+# ─────────────────────────────────────────────
+
+@app.get("/api/voices")
+async def api_get_voices():
+    """Lists available English TTS voices from edge-tts."""
+    import edge_tts
+    voices = await edge_tts.list_voices()
+    en_voices = [
+        {"name": v["ShortName"], "gender": v["Gender"], "locale": v["Locale"]}
+        for v in voices
+        if v["Locale"].startswith("en-")
+    ]
+    return {"voices": en_voices}
+
+
+@app.get("/api/video/{filename}")
+def api_serve_video(filename: str):
+    """Serves a rendered video file for in-browser preview."""
+    filepath = os.path.join("output", filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(filepath, media_type="video/mp4")
+
+
+@app.get("/api/config")
+def api_get_config():
+    """Returns the current configuration."""
+    from config import load_config
+    return load_config()
+
+
+@app.put("/api/config")
+def api_update_config(body: dict):
+    """Updates configuration values."""
+    from config import update_config
+    return update_config(body)
+
+
+@app.get("/api/music")
+def api_list_music():
+    """Lists available background music files from assets/music/."""
+    music_dir = os.path.join("assets", "music")
+    os.makedirs(music_dir, exist_ok=True)
+    tracks = []
+    for ext in ("*.mp3", "*.wav", "*.ogg", "*.m4a"):
+        for f in glob.glob(os.path.join(music_dir, ext)):
+            tracks.append({
+                "name": os.path.splitext(os.path.basename(f))[0],
+                "file": os.path.basename(f),
+            })
+    return {"tracks": tracks}
+
+
+@app.get("/api/models")
+def api_get_models():
+    """Queries Ollama for locally available models."""
+    import ollama
+    try:
+        models_response = ollama.list()
+        # Ollama API response structure often slightly varies between versions.
+        # But generally it's models_response['models'][0]['name']
+        models = [m.get("name", m.get("model")) for m in models_response.get("models", [])]
+        return {"models": models}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/history")
+def api_get_history():
+    """Returns local video history."""
+    out_dir = "output"
+    os.makedirs(out_dir, exist_ok=True)
+    videos = []
+    for f in glob.glob(os.path.join(out_dir, "*.mp4")):
+        videos.append({
+            "filename": os.path.basename(f),
+            "size_bytes": os.path.getsize(f),
+            "created_at": os.path.getctime(f),
+        })
+    videos.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"videos": videos}
+
+
+@app.delete("/api/history/{filename}")
+def api_delete_history(filename: str):
+    """Deletes a video from local history."""
+    filepath = os.path.join("output", filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail="File not found")
