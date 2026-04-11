@@ -1,7 +1,6 @@
+# 🎬 Auto-Chan Studio: Autonomous 4chan Video Producer
 
-# 🎬 Auto-Chan: Autonomous 4chan Video Producer
-
-> An intelligent, fully-automated pipeline that turns 4chan threads into highly engaging, YouTube Shorts and TikTok-ready videos using local AI.
+> An intelligent, fully-automated pipeline and Web GUI that turns 4chan threads into highly engaging, YouTube Shorts and TikTok-ready videos using local AI.
 
 Auto-Chan isn't just a scraper; it's an **AI Agent**. It browses 4chan boards, scouts for entertaining threads, uses a local LLM to curate and censor the script, takes high-resolution mobile-formatted screenshots, generates AI voiceovers, and edits the final video together—all while you sit back and watch.
 
@@ -9,14 +8,14 @@ Auto-Chan isn't just a scraper; it's an **AI Agent**. It browses 4chan boards, s
 
 ## ✨ Features
 
-* 🤖 **Local AI Curation:** Uses Ollama to read threads, select the funniest/best replies, and build a narrative script.
-* 🛡️ **Smart Censorship:** Automatically detects profanity/slurs and censors them in the text-to-speech *and* visually injects the censored text into the HTML before screenshotting to keep your channel monetizable.
+* 🕸️ **Modern Web GUI:** A premium React/Vite frontend for scouting threads, managing a paginated review workflow, and triggering renders.
+* 🤖 **Local AI Curation:** Uses Ollama and a multi-pass LLM scouting algorithm to read threads, evaluate comedic/dank potential, and build a narrative script.
+* 🛡️ **Smart Censorship:** Automatically detects profanity/slurs and censors them in text-to-speech *and* visually injects them into the HTML before screenshotting to keep your channel monetizable.
 * 📱 **Mobile-Optimized Assets:** Uses Playwright to inject premium, dark-mode CSS and capture perfectly padded, 1080x1920 friendly screenshot cards.
 * 🎙️ **High-Quality TTS:** Powered by `edge-tts` for natural-sounding, TikTok-style narration.
-* 🎛️ **Three Operating Modes:**
-  1. **Manual:** You pick the thread, it does the rest.
-  2. **Full Auto:** The AI scouts the board, picks the thread, and renders the video while you sleep.
-  3. **Executive Producer (Review):** The AI scouts and builds the script, but asks for your final approval on every reply before rendering.
+* 🎥 **Live Streaming Pipeline:** Real-time video rendering logs via Server-Sent Events (SSE) and progress bars in the GUI.
+* 🌙 **Night-Shift Batch Rendering:** Robust asynchronous batch pipeline for rendering multiple videos automatically overnight.
+* 🚀 **Auto YouTube Uploads:** Automatic video uploading to YouTube using OAuth 2.0.
 
 ---
 
@@ -25,8 +24,9 @@ Auto-Chan isn't just a scraper; it's an **AI Agent**. It browses 4chan boards, s
 Before you start, you need a few things installed on your machine:
 
 1. **Python 3.8+**
-2. **[Ollama](https://ollama.com/)** (For running the local AI model)
-3. **A Background Video:** You will need some satisfying background footage (e.g., Minecraft Parkour, GTA V racing). It should be a 9:16 vertical video.
+2. **Node.js 18+** (For the frontend Web GUI)
+3. **[Ollama](https://ollama.com/)** (For running the local AI model)
+4. **A Background Video:** You will need some satisfying background footage (e.g., Minecraft Parkour, GTA V racing). It should be a 9:16 vertical video.
 
 ---
 
@@ -34,92 +34,123 @@ Before you start, you need a few things installed on your machine:
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/yourusername/auto-chan-producer.git
-cd auto-chan-producer
+git clone https://github.com/sudhanshu5669/4Chan-to-Video-Maker.git
+cd 4Chan-to-Video-Maker
 ```
 
-### 2. Set Up a Virtual Environment (Recommended)
+### 2. Set Up the Backend
 It's best practice to keep your Python packages isolated.
 ```bash
-python -m venv venv
+python -m venv .venv
 # On Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 # On Mac/Linux:
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
-### 3. Install Python Dependencies
-Install the required libraries (Requests, BeautifulSoup, MoviePy, Playwright, etc.).
+Install the required libraries:
 ```bash
 pip install -r requirements.txt
+# (Optional) If you run into missing imports, you might also need: fastapi uvicorn pydantic python-multipart moviepy playwright edge-tts ollama google-api-python-client google-auth-oauthlib google-auth-httplib2
 ```
 
-### 4. Install Playwright Browsers
-Playwright needs its own headless Chromium browser to take the screenshots.
+Install Playwright Browsers (needed to take perfectly styled screenshots):
 ```bash
 playwright install chromium
 ```
 
-### 5. Download the Local LLM via Ollama
-Ensure Ollama is running on your machine, then pull the model we use for scouting and script editing.
+### 3. Set Up the Frontend
+Open a new terminal window, navigate to the `frontend` folder, and install NPM packages:
+```bash
+cd frontend
+npm install
+```
+
+### 4. Download the Local LLM via Ollama
+Ensure Ollama is running on your machine, then pull the model we use for scouting and script editing:
 ```bash
 ollama pull blaifa/InternVL3_5:8b
+# Or run whatever model is specified in your backend/config.py
 ```
-*(Note: If you want to use a different model like `llama3`, just update the `model=` parameter inside `llm.py`).*
 
-### 6. Add Your Background Video
-Create a folder named `assets` in the root directory (if it doesn't exist) and place your background gameplay video inside it.
-**It will automatically pick a video from the list.**
+### 5. Add Your Background Assets
+Create a folder named `assets` in the `backend/` directory (if it doesn't already exist):
+- Put your `.mp4` background gameplay videos inside `backend/assets/`.
+- Put any background music files (`.mp3`) inside `backend/assets/music/`.
 
 ---
 
-## 🕹️ How to Use
+## 📺 YouTube Auto-Upload Setup
 
-Simply run the main script. The interactive terminal will guide you through the rest.
+Auto-Chan Studio can automatically upload your rendered Shorts to YouTube via the YouTube Data API.
 
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project and enable the **YouTube Data API v3**.
+3. Create **OAuth 2.0 Client IDs** credentials (choose "Desktop app" or "Web application", allowing localhost).
+4. Download the JSON file and save it as `client_secrets.json` inside the `backend/` directory.
+5. The *first time* you upload a video (either through the GUI or CLI), a Google login window will open in your browser asking for permission.
+6. Once authorized, it will save a `token.json` file in your `backend/` folder. From then on, uploads will be fully autonomous!
+
+---
+
+## 🕹️ How to Run Auto-Chan Studio
+
+Auto-Chan Studio features two ways to run: the premium **Web GUI** or the classic **CLI**.
+
+### Method A: Web GUI (Recommended)
+
+1. Start the FastAPI backend server (from the inside backend folder):
 ```bash
+cd backend
+uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+2. Start the Frontend dev server (from the frontend folder):
+```bash
+cd frontend
+npm run dev
+```
+
+3. Open your browser and navigate to the local URL provided by Vite (usually `http://localhost:5173`).
+
+### Method B: CLI Mode
+
+If you prefer the classic terminal interface:
+```bash
+cd backend
 python main.py
 ```
-
-### The 3 Modes Explained:
-* **Mode 1 (Manual):** The script will print the live catalog of your chosen board. You type the Thread ID you want, and it generates the video.
-* **Mode 2 (Auto):** Walk away from your keyboard. The AI will read the catalog, find a thread it deems "entertaining," filter out the garbage, and render the `.mp4`.
-* **Mode 3 (Review):** The hybrid approach. The AI suggests a thread and shows you a preview. If you say yes, it builds a script and asks you to approve/reject the replies it chose to ensure perfect comedic pacing.
+* **Manual Mode:** You paste the thread ID, it builds the video.
+* **Auto Mode:** The AI acts as a solo agent, picks a thread, renders it, and optionally uploads.
+* **Review Mode:** The AI suggests threads and allows you to curate the LLM script before rendering.
 
 ---
 
-## 📂 Project Structure
+## 📂 Project Architecture
 
 ```text
 auto-chan-producer/
-│
-├── assets/                  # Put your 'background.mp4' here!
-├── output/                  # Your finished, ready-to-upload videos appear here
-├── temp/                    # Temporary audio files and raw screenshots 
-│
-├── main.py                  # The master script and interactive terminal UI
-├── llm.py                   # The "AI Brain" - handles scouting and censoring via Ollama
-├── scraper.py               # Handles the 4chan API, fetching boards, and cleaning raw HTML
-├── screenshot.py            # Playwright engine: injects custom CSS, censors DOM, takes pics
-├── tts.py                   # Handles text-to-speech generation via Edge TTS
-├── video.py                 # MoviePy engine: stitches audio, images, and background together
-│
-└── requirements.txt         # Python dependencies
+├── backend/
+│   ├── assets/              # Put your 'background.mp4' / 'music.mp3' here!
+│   ├── temp/                # Temp audio files and playwright snapshots
+│   ├── output/              # Your finished `.mp4` videos ready to go viral
+│   ├── server.py            # FastAPI Web Server & SSE Streaming endpoints
+│   ├── main.py              # CLI interactive alternative
+│   ├── llm.py               # Mult-pass Scout AI & Censor/Editor AI
+│   ├── batch.py             # Asynchronous offline batch rendering engine
+│   ├── Uploader.py          # Google / YouTube Data APIs v3 Integration
+│   ├── client_secrets.json  # (User provided) YouTube API credentials
+│   ├── token.json           # (Auto generated) Session keys for YouTube
+│   └── ...                  # Video/scraper/TTS logic
+├── frontend/
+│   ├── src/                 # React components (Studio interface, Review mode, Pipeline logs)
+│   ├── package.json         # Node dependencies
+│   └── vite.config.js       # Vite app config
+├── requirements.txt         # Python dependencies
+└── README.md                # This file
 ```
-
----
-
-## 🧠 How It Works Under the Hood
-
-1. **The Scout:** Uses the `4chan /catalog.json` API to pull the top active threads. It feeds these to the local LLM to evaluate for entertainment value and safety.
-2. **The Editor:** Once a thread is picked, the API fetches the top 20 replies. The LLM acts as an editor, picking the 5 best replies, cutting out boring ones, and replacing profanity with safe alternatives (e.g., "fucking" becomes "f").
-3. **The Prop Master:** `screenshot.py` visits the live 4chan thread in a hidden browser. It uses JavaScript to dynamically replace the text on the screen with the LLM's censored text, injects beautiful CSS, hides everything except the target post, and snaps a perfect PNG.
-4. **The Assembly:** MoviePy dynamically resizes the screenshots to perfectly fit 85% of your background video's width, syncs the image durations to the TTS audio lengths, loops the background video if necessary, and renders the final `.mp4`.
-
----
 
 ## ⚠️ Disclaimer & API Etiquette
 
-* **Rate Limiting:** This script is designed to respect the 4chan API guidelines (1 request per second). Do not aggressively loop the scraper without delays, or your IP will be temporarily banned by 4chan.
-* **Content Warning:** 4chan is unmoderated and highly unpredictable. While the LLM is instructed to filter out hate speech and illegal content, AI is not perfect. **Always review your videos before uploading them to YouTube or TikTok.**
-* **Intended Use:** This tool is for educational purposes, Python web-scraping practice, and automated video editing workflows.
+* **Content Warning:** 4chan is unmoderated and unpredictable. While the LLM filters out extreme hate speech, AI is not perfect. **Always review your videos before uploading**.
+* **Intended Use:** This tool is for educational purposes, Python/JS web-scraping practice, and automated video editing workflows. Ensure you respect 4chan's API limits (1 request per second max, built into the scraper).

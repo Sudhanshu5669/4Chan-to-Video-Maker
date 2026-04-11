@@ -166,8 +166,8 @@ THREADS:
 {context_p1}
 
 CRITERIA:
-10/10: Incredible hook, hilarious, clear conflict/story, pure dankness.
-1/10: Boring, overly political, hateful, random statements with no story.
+10/10: Incredible hook, hilarious, clear conflict/story, pure dankness or a weird question for the audience that is not racist, hateful or offensive.
+1/10: Boring, overly political, hateful, offensive.
 
 Return ONLY valid JSON:
 {{
@@ -327,4 +327,4 @@ Return ONLY valid JSON:
         
         yield ("result", data)
     except Exception as e:
-        yield ("error", str(e))
+        yield ("error", str(e))
