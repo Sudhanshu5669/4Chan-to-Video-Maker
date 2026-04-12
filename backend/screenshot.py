@@ -104,7 +104,7 @@ body {
 """
 
 
-def _do_capture(page, post_id, replacement_text, output_path):
+def _do_capture(page, post_id, replacement_text, output_path, hide_image=False):
     """Internal: isolate and screenshot a single post on an already-loaded page."""
     selector = f"#pc{post_id}"
 
@@ -117,6 +117,10 @@ def _do_capture(page, post_id, replacement_text, output_path):
             document.querySelectorAll('.postContainer').forEach(p => {{
                 if (p !== el) p.style.display = 'none';
             }});
+            if ({'true' if hide_image else 'false'}) {{
+                const fileEl = el.querySelector('.file');
+                if (fileEl) fileEl.style.display = 'none';
+            }}
         }}
     """)
 
@@ -170,7 +174,7 @@ def _do_capture(page, post_id, replacement_text, output_path):
 
 
 def capture_post(board: str, thread_id: int, post_id: int,
-                 output_path: str, replacement_text: str | None = None):
+                 output_path: str, replacement_text: str | None = None, hide_image: bool = False):
     """
     Navigates to the thread, isolates a single post as a styled card,
     injects censored text if provided, and screenshots it.
@@ -193,7 +197,7 @@ def capture_post(board: str, thread_id: int, post_id: int,
         page.goto(url, wait_until="load", timeout=30_000)
         page.add_style_tag(content=CARD_CSS)
 
-        success = _do_capture(page, post_id, replacement_text, output_path)
+        success = _do_capture(page, post_id, replacement_text, output_path, hide_image)
         if not success:
             raise RuntimeError(
                 f"Could not get bounding box for post {post_id} — element may not exist in thread."
@@ -229,6 +233,7 @@ def capture_posts_batch(board: str, thread_id: int, posts: list,
         for idx, post in enumerate(posts):
             post_id = post["id"]
             replacement_text = post.get("text")
+            hide_image = post.get("hide_image", False)
             img_path = os.path.join(output_dir, f"post_{post_id}.png")
 
             try:
@@ -241,7 +246,7 @@ def capture_posts_batch(board: str, thread_id: int, posts: list,
                 page.goto(url, wait_until="load", timeout=30_000)
                 page.add_style_tag(content=CARD_CSS)
 
-                success = _do_capture(page, post_id, replacement_text, img_path)
+                success = _do_capture(page, post_id, replacement_text, img_path, hide_image)
                 if success:
                     results.append((idx, img_path))
                 else:

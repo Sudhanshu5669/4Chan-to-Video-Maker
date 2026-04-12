@@ -34,12 +34,14 @@ def make_video(
     music_volume: float = 0.15,
     fps: int = 30,
     preset: str = "fast",
+    apply_ken_burns: bool = False,
 ):
     """
     Assembles the final Short:
     - Background video loops for full duration
     - Each post card is centred on screen, synced to its TTS audio
     - Cards fade in/out with a short crossfade between them
+    - Optional Ken Burns zoom effect
     - Optional background music mixed at configurable volume
     """
     if not image_paths:
@@ -73,6 +75,14 @@ def make_video(
             .set_start(t)
             .set_position("center")
         )
+
+        if apply_ken_burns:
+            # Subtle zoom from 1.0 to 1.1x over the duration
+            zoom_factor = 0.1
+            def zoom_effect(t_frame, _dur=duration, _zf=zoom_factor):
+                return 1.0 + _zf * (t_frame / _dur)
+            card = card.resize(zoom_effect)
+
 
         # Fade in at start, fade out at end (clamped so short clips don't break)
         fade = min(FADE_DURATION, duration / 3)

@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 
 // ── Sortable Post Item ───────────────────────────────────────────────────────
-function SortablePost({ post, idx, onRemoveReply }) {
+function SortablePost({ post, idx, onRemoveReply, onUpdateReply, voices }) {
   const {
     attributes,
     listeners,
@@ -33,6 +33,10 @@ function SortablePost({ post, idx, onRemoveReply }) {
     isDragging,
   } = useSortable({ id: post.id.toString() });
 
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [editText, setEditText] = React.useState(post.text);
+  const [selectedVoice, setSelectedVoice] = React.useState(post.voice || '');
+
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -41,10 +45,32 @@ function SortablePost({ post, idx, onRemoveReply }) {
     position: 'relative',
   };
 
+  const handleSave = () => {
+    onUpdateReply(post.id, { text: editText, voice: selectedVoice });
+    setIsEditing(false);
+  };
+
   return (
     <div ref={setNodeRef} style={style} className={`post-item ${isDragging ? 'dragging' : ''}`}>
-      <div className="post-header">
+      <div className="post-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span className="post-id">Reply &gt;&gt;{post.id}</span>
+        
+        {/* Voice Selector */}
+        <select 
+          value={selectedVoice} 
+          onChange={(e) => {
+            setSelectedVoice(e.target.value);
+            onUpdateReply(post.id, { text: isEditing ? editText : post.text, voice: e.target.value });
+          }}
+          style={{ padding: '2px 4px', fontSize: '0.75rem', borderRadius: '4px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+        >
+          <option value="">Default Voice</option>
+          {voices && voices.map(v => (
+             <option key={v.name} value={v.name}>{v.name.split('-')[2].replace('Neural', '')} ({v.gender})</option>
+          ))}
+        </select>
+
+        <div style={{ flex: 1 }} />
         <button
           className="icon-button drag-handle"
           {...attributes}
@@ -54,8 +80,57 @@ function SortablePost({ post, idx, onRemoveReply }) {
           <GripVertical size={14} />
         </button>
       </div>
-      <div className="post-text">{post.text}</div>
-      <div className="post-actions">
+
+      {post.has_image && !post.hide_image && (
+        <div className="post-image-preview" style={{ padding: '0 18px', marginBottom: '10px' }}>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <img 
+              src={post.thumb_url || post.image_url} 
+              alt="Attached" 
+              style={{ maxHeight: '100px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+            />
+            <button
+              onClick={() => onUpdateReply(post.id, { hide_image: true })}
+              style={{
+                position: 'absolute', top: '-8px', right: '-8px',
+                background: 'var(--danger-color)', color: 'white',
+                border: 'none', borderRadius: '50%', width: '24px', height: '24px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
+              }}
+              title="Remove image from screenshot"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+      {post.has_image && post.hide_image && (
+        <div style={{ padding: '0 18px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px', fontStyle: 'italic' }}>
+          Image removed from screenshot. <button onClick={() => onUpdateReply(post.id, { hide_image: false })} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline' }}>Undo</button>
+        </div>
+      )}
+      <div className="post-text">
+        {isEditing ? (
+           <textarea 
+             value={editText} 
+             onChange={e => setEditText(e.target.value)} 
+             style={{ width: '100%', minHeight: '60px', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '6px' }}
+           />
+        ) : (
+           typeof post.text === 'string' ? post.text.slice(0, 150) + (post.text.length > 150 ? '...' : '') : post.text
+        )}
+      </div>
+      <div className="post-actions" style={{ display: 'flex', gap: '8px' }}>
+        {isEditing ? (
+           <button className="icon-button" style={{ color: 'var(--success-color)' }} onClick={handleSave}>
+             Save Text
+           </button>
+        ) : (
+           <button className="icon-button" onClick={() => setIsEditing(true)}>
+             Edit Text
+           </button>
+        )}
         <button
           className="icon-button delete"
           onClick={() => onRemoveReply(idx)}
@@ -80,8 +155,10 @@ export default function ScriptEditor({
   onRemoveReply,
   onAddReply,
   onReorder,
+  onUpdateReply,
   onSetPage,
   onProceed,
+  voices = [],
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -133,7 +210,47 @@ export default function ScriptEditor({
                 <div className="post-header">
                   <span className="post-id">OP</span>
                   <span className="text-muted" style={{ fontSize: '0.72rem' }}>pinned</span>
+                  <div style={{flex: 1}} />
+                  <select 
+                    value={op.voice || ''} 
+                    onChange={(e) => onUpdateReply(op.id, { text: op.text, voice: e.target.value })}
+                    style={{ padding: '2px 4px', fontSize: '0.75rem', borderRadius: '4px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="">Default Voice</option>
+                    {voices && voices.map(v => (
+                       <option key={v.name} value={v.name}>{v.name.split('-')[2].replace('Neural', '')} ({v.gender})</option>
+                    ))}
+                   </select>
                 </div>
+                {op.has_image && !op.hide_image && (
+                  <div className="post-image-preview" style={{ padding: '0 18px', marginBottom: '10px' }}>
+                    <div style={{ position: 'relative', display: 'inline-block' }}>
+                      <img 
+                        src={op.thumb_url || op.image_url} 
+                        alt="Attached" 
+                        style={{ maxHeight: '100px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                      />
+                      <button
+                        onClick={() => onUpdateReply(op.id, { hide_image: true })}
+                        style={{
+                          position: 'absolute', top: '-8px', right: '-8px',
+                          background: 'var(--danger-color)', color: 'white',
+                          border: 'none', borderRadius: '50%', width: '24px', height: '24px',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          cursor: 'pointer', boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                        }}
+                        title="Remove image from screenshot"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {op.has_image && op.hide_image && (
+                  <div style={{ padding: '0 18px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px', fontStyle: 'italic' }}>
+                    Image removed from screenshot. <button onClick={() => onUpdateReply(op.id, { hide_image: false })} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline' }}>Undo</button>
+                  </div>
+                )}
                 <div className="post-text">{op.text}</div>
               </div>
             )}
@@ -154,6 +271,8 @@ export default function ScriptEditor({
                     post={post}
                     idx={idx + 1}
                     onRemoveReply={onRemoveReply}
+                    onUpdateReply={onUpdateReply}
+                    voices={voices}
                   />
                 ))}
               </SortableContext>

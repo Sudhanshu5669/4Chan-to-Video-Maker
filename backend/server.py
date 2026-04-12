@@ -56,6 +56,7 @@ class RenderRequest(BaseModel):
     tts_voice: str = "en-US-ChristopherNeural"
     music_file: str = ""
     music_volume: float = 0.15
+    ken_burns: bool = False
 
 # ─────────────────────────────────────────────
 #  HELPERS FROM MAIN.PY (COPIED/MODIFIED)
@@ -80,15 +81,32 @@ def get_all_thread_data(board, thread_id):
     if not posts:
         return None, []
 
-    op_text = clean_text(posts[0].get("com", ""))
+    op_post = posts[0]
+    op_text = clean_text(op_post.get("com", ""))
+    op_has_image = "tim" in op_post
+    op_data = {
+        "text": op_text,
+        "has_image": op_has_image,
+        "image_url": f"https://i.4cdn.org/{board}/{op_post['tim']}{op_post['ext']}" if op_has_image else None,
+        "thumb_url": f"https://i.4cdn.org/{board}/{op_post['tim']}s.jpg" if op_has_image else None
+    }
 
     replies_data = []
     for p in posts[1:]:
         text = clean_text(p.get("com", ""))
-        if text and len(text) > 20: # Ensure valid text
-            replies_data.append({"id": p["no"], "text": text})
+        has_image = "tim" in p
+        if text and len(text) > 20 or has_image: # Keep short text posts if they have an image
+            reply_img = f"https://i.4cdn.org/{board}/{p['tim']}{p['ext']}" if has_image else None
+            reply_thumb = f"https://i.4cdn.org/{board}/{p['tim']}s.jpg" if has_image else None
+            replies_data.append({
+                "id": p["no"], 
+                "text": text,
+                "has_image": has_image,
+                "image_url": reply_img,
+                "thumb_url": reply_thumb
+            })
 
-    return op_text, replies_data
+    return op_data, replies_data
 
 def generate_scene(args):
     index, board, thread_id, post = args
@@ -154,31 +172,39 @@ def api_scout_stream(req: ScoutRequest):
 @app.get("/api/thread/{board}/{thread_id}")
 def api_get_thread(board: str, thread_id: int):
     # Fetch all replies for pagination purposes
-    op_text, replies_data = get_all_thread_data(board, thread_id)
-    if not op_text and not replies_data:
+    op_data, replies_data = get_all_thread_data(board, thread_id)
+    if not op_data and not replies_data:
         raise HTTPException(status_code=404, detail="Thread not found or no readable text.")
 
     # We only curate using top 25 replies for LLM context length/time
-    llm_result = curate_and_censor_thread(op_text, replies_data[:25])
+    llm_result = curate_and_censor_thread(op_data["text"], replies_data[:25])
     
     if not llm_result:
         raise HTTPException(status_code=500, detail="LLM Editor failed to curate thread.")
 
     selected_replies = llm_result.get("selected_replies", [])
+    reply_meta_map = {r["id"]: r for r in replies_data}
+    
     for sr in selected_replies:
         if "censored_text" in sr:
             sr["text"] = sr.pop("censored_text")
+        if sr["id"] in reply_meta_map:
+            meta = reply_meta_map[sr["id"]]
+            sr["has_image"] = meta.get("has_image", False)
+            sr["image_url"] = meta.get("image_url")
+            sr["thumb_url"] = meta.get("thumb_url")
             
     selected_ids = {r["id"] for r in selected_replies}
     
     # Filter out selected replies from 'all replies' to return 'other replies'
     other_replies = [r for r in replies_data if r["id"] not in selected_ids]
 
+    op_entry = dict(op_data)
+    op_entry["id"] = thread_id
+    op_entry["text"] = llm_result.get("op_censored", op_data["text"])
+
     return {
-        "op": {
-            "id": thread_id,
-            "text": llm_result.get("op_censored", op_text)
-        },
+        "op": op_entry,
         "selected_replies": selected_replies,
         "other_replies": other_replies
     }
@@ -186,30 +212,39 @@ def api_get_thread(board: str, thread_id: int):
 @app.get("/api/thread_stream/{board}/{thread_id}")
 def api_get_thread_stream(board: str, thread_id: int):
     # Fetch all replies for pagination purposes
-    op_text, replies_data = get_all_thread_data(board, thread_id)
-    if not op_text and not replies_data:
+    op_data, replies_data = get_all_thread_data(board, thread_id)
+    if not op_data and not replies_data:
         raise HTTPException(status_code=404, detail="Thread not found or no readable text.")
 
     from llm import curate_and_censor_thread_stream
     import json
     
     def generate():
-        for event_type, data in curate_and_censor_thread_stream(op_text, replies_data[:25]):
+        for event_type, data in curate_and_censor_thread_stream(op_data["text"], replies_data[:25]):
             if event_type == "chunk":
                 yield f"event: chunk\ndata: {json.dumps(data)}\n\n"
             elif event_type == "result":
                 selected_replies = data.get("selected_replies", [])
+                reply_meta_map = {r["id"]: r for r in replies_data}
+                
                 for sr in selected_replies:
                     if "censored_text" in sr:
                         sr["text"] = sr.pop("censored_text")
+                    if sr["id"] in reply_meta_map:
+                        meta = reply_meta_map[sr["id"]]
+                        sr["has_image"] = meta.get("has_image", False)
+                        sr["image_url"] = meta.get("image_url")
+                        sr["thumb_url"] = meta.get("thumb_url")
+                        
                 selected_ids = {r["id"] for r in selected_replies}
                 other_replies = [r for r in replies_data if r["id"] not in selected_ids]
                 
+                op_entry = dict(op_data)
+                op_entry["id"] = thread_id
+                op_entry["text"] = data.get("op_censored", op_data["text"])
+
                 final_payload = {
-                    "op": {
-                        "id": thread_id,
-                        "text": data.get("op_censored", op_text)
-                    },
+                    "op": op_entry,
                     "selected_replies": selected_replies,
                     "other_replies": other_replies
                 }
@@ -246,8 +281,15 @@ def api_render_stream(req: RenderRequest):
                 prog = 5 + int((done / total) * 20)
                 q.put({"type": "progress", "status": f"Captured screenshot {done}/{total}", "progress": prog})
 
+            import re
+            ss_playlist = []
+            for post in playlist:
+                # Strip specific XML tags before screenshotting
+                clean_text = re.sub(r'(</?censor>|<pause=[0-9.]+s>)', '', post['text'])
+                ss_playlist.append({"id": post['id'], "text": clean_text, "hide_image": post.get("hide_image", False)})
+
             screenshot_results = capture_posts_batch(
-                req.board, req.thread_id, playlist,
+                req.board, req.thread_id, ss_playlist,
                 output_dir="temp",
                 progress_callback=on_screenshot_progress
             )
@@ -267,7 +309,8 @@ def api_render_stream(req: RenderRequest):
                 futures = {}
                 for post in playlist:
                     audio_path = f"temp/audio_{post['id']}.mp3"
-                    fut = pool.submit(generate_tts, post['text'], audio_path, voice=tts_voice, rate=tts_rate)
+                    p_voice = post.get("voice") or tts_voice
+                    fut = pool.submit(generate_tts, post['text'], audio_path, voice=p_voice, rate=tts_rate)
                     futures[fut] = (post['id'], audio_path)
 
                 for fut in as_completed(futures):
@@ -307,7 +350,8 @@ def api_render_stream(req: RenderRequest):
                 music_path=os.path.join("assets", "music", req.music_file) if req.music_file else None,
                 music_volume=req.music_volume,
                 fps=v_fps,
-                preset=v_preset
+                preset=v_preset,
+                apply_ken_burns=req.ken_burns
             )
 
             # ── Phase 5: YouTube Upload (optional) ──

@@ -71,6 +71,34 @@ export default function SettingsPanel({ onBack }) {
         </div>
 
         <div className="form-stack">
+          {/* LLM Provider */}
+          <div className="form-group">
+            <label className="form-label">
+              <Server size={16} /> LLM Provider
+            </label>
+            <select
+              name="llm_provider"
+              value={config.llm_provider || 'ollama'}
+              onChange={handleChange}
+            >
+              <option value="ollama">Ollama (Local Offline)</option>
+              <option value="gemini">Gemini API (Cloud)</option>
+            </select>
+          </div>
+          
+          {config.llm_provider === 'gemini' && (
+            <div className="form-group">
+              <label className="form-label">Gemini API Key</label>
+              <input
+                type="password"
+                name="gemini_api_key"
+                value={config.gemini_api_key || ''}
+                onChange={handleChange}
+                placeholder="AIza..."
+              />
+            </div>
+          )}
+
           {/* LLM Model */}
           <div className="form-group">
             <label className="form-label">
@@ -113,6 +141,19 @@ export default function SettingsPanel({ onBack }) {
               <span>Logical</span>
               <span>Creative</span>
             </div>
+          </div>
+
+          {/* Censor Mode */}
+          <div className="form-group">
+            <label className="form-label">Audio Censor Mode</label>
+            <select
+              name="censor_mode"
+              value={config.censor_mode || 'beep'}
+              onChange={handleChange}
+            >
+              <option value="beep">Beep (Bleeping tone overlay)</option>
+              <option value="mute">Mute (Cut audio entirely)</option>
+            </select>
           </div>
 
           {/* Video Options (Placeholder for expansion) */}

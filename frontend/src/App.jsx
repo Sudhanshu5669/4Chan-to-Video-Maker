@@ -46,6 +46,7 @@ function App() {
     musicVolume: 0.15,
     startPage: 0,
     randomPage: false,
+    ken_burns: false,
   });
 
   const [renderResult, setRenderResult] = useState(null);
@@ -305,6 +306,7 @@ function App() {
           tts_voice: renderSettings.ttsVoice,
           music_file: renderSettings.musicFile,
           music_volume: renderSettings.musicVolume,
+          ken_burns: !!renderSettings.ken_burns,
         },
         chunk => {
           if (chunk.progress !== undefined) {
@@ -350,6 +352,7 @@ function App() {
           tts_voice: renderSettings.ttsVoice,
           music_file: renderSettings.musicFile,
           music_volume: renderSettings.musicVolume,
+          ken_burns: !!renderSettings.ken_burns,
         },
         chunk => {
           if (chunk.progress !== undefined) {
@@ -394,6 +397,10 @@ function App() {
     const targetIdx = direction === 'up' ? index - 1 : index + 1;
     [newPlaylist[index], newPlaylist[targetIdx]] = [newPlaylist[targetIdx], newPlaylist[index]];
     setPlaylist(newPlaylist);
+  };
+
+  const updateReply = (id, updates) => {
+    setPlaylist(playlist.map(p => p.id === id ? { ...p, ...updates } : p));
   };
 
   // ── Derived ─────────────────────────────────────────────────────────────
@@ -550,8 +557,10 @@ function App() {
             onRemoveReply={removeReply}
             onAddReply={addReply}
             onReorder={newReplies => setPlaylist([playlist[0], ...newReplies])}
+            onUpdateReply={updateReply}
             onSetPage={setPage}
             onProceed={() => setStep('render-setup')}
+            voices={voices}
           />
         )}
 

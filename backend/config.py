@@ -11,6 +11,10 @@ DEFAULT_CONFIG = {
     "max_replies": 5,
     "video_fps": 30,
     "video_preset": "fast",
+    "llm_provider": "ollama",
+    "gemini_api_key": "",
+    "censor_mode": "beep",
+    "ken_burns": False
 }
 
 

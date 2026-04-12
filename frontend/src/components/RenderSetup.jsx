@@ -226,6 +226,26 @@ export default function RenderSetup({
             </label>
           </div>
 
+          {/* Ken Burns Toggle */}
+          <div className="toggle-row" style={{marginTop: '0.5rem'}}>
+            <div className="flex-center gap-1">
+              <span style={{ fontWeight: '600' }}>Dynamic Camera (Ken Burns)</span>
+            </div>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={renderSettings.ken_burns || false}
+                onChange={e =>
+                  onUpdateSettings({
+                    ...renderSettings,
+                    ken_burns: e.target.checked,
+                  })
+                }
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
+
           {/* Action Buttons */}
           <div className="render-actions">
             <button className="btn-secondary" onClick={onBack}>
