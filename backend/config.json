@@ -6,8 +6,8 @@
   "max_replies": 5,
   "video_fps": 30,
   "video_preset": "fast",
-  "llm_provider": "ollama",
-  "gemini_api_key": "AIzaSyA3z5T4yHUIXpUgbPbIvBwmghVoiuIrv04",
+  "llm_provider": "gemini",
+  "gemini_api_key": "",
   "censor_mode": "beep",
   "ken_burns": false
 }
