@@ -7,19 +7,6 @@ from google.genai import types
 
 from config import load_config
 
-_embedder = None
-def get_embedder():
-    global _embedder
-    if _embedder is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            print("  [Semantic Scout] Loading embedding model...")
-            _embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        except ImportError:
-            print("  [Semantic Scout] sentence-transformers not installed. Skipping embedding.")
-            return None
-    return _embedder
-
 def get_llm_settings():
     config = load_config()
     return {
@@ -117,33 +104,8 @@ def _call_llm_stream(prompt: str, model: str = None):
         except Exception as e:
             raise Exception(f"Ollama Streaming Error: {e}")
 
-def semantic_filter(threads_data: list, top_k: int = 15):
-    embedder = get_embedder()
-    if not embedder or not threads_data:
-        return threads_data[:top_k]
-    
-    import numpy as np
-    print("  [Semantic Scout] Ranking threads by semantic dankness...")
-    target_embedding = embedder.encode("funny highly engaging absurd story green text dank internet humor")
-    target_norm = np.linalg.norm(target_embedding)
-    
-    scored_threads = []
-    for t in threads_data:
-        text_preview = t['text'][:500]
-        t_emb = embedder.encode(text_preview)
-        # Cosine similarity (not raw dot product)
-        t_norm = np.linalg.norm(t_emb)
-        if target_norm > 0 and t_norm > 0:
-            score = float(np.dot(target_embedding, t_emb) / (target_norm * t_norm))
-        else:
-            score = 0.0
-        scored_threads.append((score, t))
-    
-    scored_threads.sort(key=lambda x: x[0], reverse=True)
-    return [t for score, t in scored_threads[:top_k]]
-
 def scout_best_thread(threads_data: list, model: str = None):
-    threads_data = semantic_filter(threads_data, top_k=15)
+    threads_data = threads_data[:15]
     context = "\n".join(
         f"ID:{t['id']} REPLIES:{t['replies']}\n{t['text']}"
         for t in threads_data
@@ -170,9 +132,9 @@ Return ONLY valid JSON and USE EXACT KEY NAMES:
         return None, "LLM failed", ""
     return data.get("selected_thread_id"), data.get("reason", ""), data.get("preview", "")
 
-def curate_and_censor_thread(op_text: str, replies_data: list, model: str = None) -> dict | None:
+def curate_thread(op_text: str, replies_data: list, model: str = None) -> dict | None:
     replies_block = "\n".join(f"ID {r['id']}: {r['text']}" for r in replies_data)
-    prompt = f"""You are a script editor for a viral YouTube Shorts channel. Edit the thread into a clean, entertaining short-form video script.
+    prompt = f"""You are a script editor for a viral YouTube Shorts channel. Edit the thread into an entertaining short-form video script. DO NOT CENSOR PROFANITY. Keep the original words.
 
 OP:
 {op_text}
@@ -182,11 +144,10 @@ REPLIES:
 
 TASKS:
 1. Select 2-5 best replies. Remove low-effort replies.
-2. Censor profanity by replacing only the remaining letters with <censor> tags. The first letter stays out. E.g., shit -> s<censor>hit</censor>, fucking -> f<censor>ucking</censor>.
-3. Add '<pause=1s>' strings where dramatic pauses are needed for comedic timing.
+2. Add '<pause=1s>' strings where dramatic pauses are needed for comedic timing.
 
 Return ONLY valid JSON:
-{{"op_censored": "<string>", "selected_replies": [{{"id": <int>, "censored_text": "<string>"}}]}}"""
+{{"op_text": "<string>", "selected_replies": [{{"id": <int>, "text": "<string>"}}]}}"""
     data = _call_llm(prompt, model)
     if data is None: return None
     
@@ -202,8 +163,8 @@ def scout_best_thread_stream(threads_data: list, model: str = None):
         yield ("error", "No threads provided.")
         return
         
-    yield ("chunk", "\n[Semantic Scout] Filtering catalog top threads...\n\n")
-    threads_data = semantic_filter(threads_data, top_k=15)
+    yield ("chunk", "\n[Scout] Fetching catalog top threads...\n\n")
+    threads_data = threads_data[:15]
     
     yield ("chunk", "\n[Pass 1] Generating Dankness Leaderboard...\n\n")
     context_p1 = "\n".join(
@@ -261,9 +222,9 @@ Return valid JSON: {{"selected_thread_id": <int>, "reason": "<string>", "preview
     except Exception as e:
         yield ("error", str(e))
 
-def curate_and_censor_thread_stream(op_text: str, replies_data: list, model: str = None):
+def curate_thread_stream(op_text: str, replies_data: list, model: str = None):
     replies_block = "\n".join(f"ID {r['id']}: {r['text']}" for r in replies_data)
-    prompt = f"""You are a script editor for a viral YouTube Shorts channel. Edit the thread into a clean, entertaining short-form video script.
+    prompt = f"""You are a script editor for a viral YouTube Shorts channel. Edit the thread into an entertaining short-form video script. DO NOT CENSOR PROFANITY. Keep the original words.
 
 OP:
 {op_text}
@@ -273,12 +234,11 @@ REPLIES:
 
 TASKS:
 1. Select 2-5 best replies. Remove low-effort replies.
-2. Censor profanity by replacing only the remaining letters with <censor> tags. The first letter stays out. E.g., shit -> s<censor>hit</censor>, fucking -> f<censor>ucking</censor>.
-3. Add '<pause=1s>' strings where dramatic pauses are needed for comedic timing.
-4. Make sure the sequence reads like a short story from top to bottom.
+2. Add '<pause=1s>' strings where dramatic pauses are needed for comedic timing.
+3. Make sure the sequence reads like a short story from top to bottom.
 
 Return ONLY valid JSON:
-{{"op_censored": "<string>", "selected_replies": [{{"id": <int>, "censored_text": "<string>"}}]}}"""
+{{"op_text": "<string>", "selected_replies": [{{"id": <int>, "text": "<string>"}}]}}"""
 
     yield ("chunk", "\n[Editor] Curating script and formatting pacing tags...\n\n")
     try:
@@ -298,3 +258,34 @@ Return ONLY valid JSON:
         yield ("result", data)
     except Exception as e:
         yield ("error", str(e))
+
+def censor_playlist(playlist: list, model: str = None) -> list:
+    if not playlist:
+        return playlist
+    
+    text_block = "\n".join(f"ID {p['id']}: {p['text']}" for p in playlist)
+    prompt = f"""You are a content moderator for YouTube Shorts. Censor ALL profanity, slurs, and highly offensive words in the texts below. 
+To Censor: replace only the remaining letters with <censor> tags. The first letter stays out.
+Example: shit -> s<censor>hit</censor>, fucking -> f<censor>ucking</censor>, retard -> r<censor>etard</censor>.
+
+TEXTS:
+{text_block}
+
+Return ONLY valid JSON matching this exact structure:
+{{"censored_replies": [{{"id": <int>, "text": "<censored string>"}}]}}"""
+
+    print("  [Censor] Processing final script for profanity...")
+    data = _call_llm(prompt, model)
+    if not data or "censored_replies" not in data:
+        return playlist
+        
+    censored_map = {r["id"]: r["text"] for r in data["censored_replies"]}
+    
+    censored_playlist = []
+    for p in playlist:
+        new_p = dict(p)
+        if p["id"] in censored_map:
+            new_p["text"] = censored_map[p["id"]]
+        censored_playlist.append(new_p)
+        
+    return censored_playlist

@@ -78,10 +78,10 @@ def make_video(
 
         if apply_ken_burns:
             # Subtle zoom from 1.0 to 1.1x over the duration
-            zoom_factor = 0.1
-            def zoom_effect(t_frame, _dur=duration, _zf=zoom_factor):
-                return 1.0 + _zf * (t_frame / _dur)
-            card = card.resize(zoom_effect)
+            def get_zoom_effect(dur):
+                return lambda t: 1.0 + 0.1 * (t / dur)
+            
+            card = card.resize(get_zoom_effect(duration))
 
 
         # Fade in at start, fade out at end (clamped so short clips don't break)

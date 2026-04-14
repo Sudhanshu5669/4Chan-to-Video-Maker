@@ -2,6 +2,18 @@ import json
 import os
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+
+def load_env():
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r") as f:
+            for line in f:
+                if line.strip() and not line.startswith("#"):
+                    if "=" in line:
+                        k, v = line.strip().split("=", 1)
+                        os.environ[k.strip()] = v.strip(' "\'')
+
+load_env()
 
 DEFAULT_CONFIG = {
     "llm_model": "llama3.1:8b",
@@ -12,7 +24,7 @@ DEFAULT_CONFIG = {
     "video_fps": 30,
     "video_preset": "fast",
     "llm_provider": "ollama",
-    "gemini_api_key": "",
+    "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
     "censor_mode": "beep",
     "ken_burns": False
 }

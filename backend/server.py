@@ -17,7 +17,7 @@ from scraper import get_catalog_page_candidates, clean_text, get_all_boards
 from screenshot import capture_post, capture_posts_batch
 from tts import generate_tts
 from video import make_video
-from llm import curate_and_censor_thread, scout_best_thread
+from llm import curate_thread, scout_best_thread
 
 # Add backend to path if needed
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -177,7 +177,7 @@ def api_get_thread(board: str, thread_id: int):
         raise HTTPException(status_code=404, detail="Thread not found or no readable text.")
 
     # We only curate using top 25 replies for LLM context length/time
-    llm_result = curate_and_censor_thread(op_data["text"], replies_data[:25])
+    llm_result = curate_thread(op_data["text"], replies_data[:25])
     
     if not llm_result:
         raise HTTPException(status_code=500, detail="LLM Editor failed to curate thread.")
@@ -186,8 +186,6 @@ def api_get_thread(board: str, thread_id: int):
     reply_meta_map = {r["id"]: r for r in replies_data}
     
     for sr in selected_replies:
-        if "censored_text" in sr:
-            sr["text"] = sr.pop("censored_text")
         if sr["id"] in reply_meta_map:
             meta = reply_meta_map[sr["id"]]
             sr["has_image"] = meta.get("has_image", False)
@@ -201,7 +199,7 @@ def api_get_thread(board: str, thread_id: int):
 
     op_entry = dict(op_data)
     op_entry["id"] = thread_id
-    op_entry["text"] = llm_result.get("op_censored", op_data["text"])
+    op_entry["text"] = llm_result.get("op_text", op_data["text"])
 
     return {
         "op": op_entry,
@@ -216,11 +214,11 @@ def api_get_thread_stream(board: str, thread_id: int):
     if not op_data and not replies_data:
         raise HTTPException(status_code=404, detail="Thread not found or no readable text.")
 
-    from llm import curate_and_censor_thread_stream
+    from llm import curate_thread_stream
     import json
     
     def generate():
-        for event_type, data in curate_and_censor_thread_stream(op_data["text"], replies_data[:25]):
+        for event_type, data in curate_thread_stream(op_data["text"], replies_data[:25]):
             if event_type == "chunk":
                 yield f"event: chunk\ndata: {json.dumps(data)}\n\n"
             elif event_type == "result":
@@ -228,8 +226,6 @@ def api_get_thread_stream(board: str, thread_id: int):
                 reply_meta_map = {r["id"]: r for r in replies_data}
                 
                 for sr in selected_replies:
-                    if "censored_text" in sr:
-                        sr["text"] = sr.pop("censored_text")
                     if sr["id"] in reply_meta_map:
                         meta = reply_meta_map[sr["id"]]
                         sr["has_image"] = meta.get("has_image", False)
@@ -241,7 +237,7 @@ def api_get_thread_stream(board: str, thread_id: int):
                 
                 op_entry = dict(op_data)
                 op_entry["id"] = thread_id
-                op_entry["text"] = data.get("op_censored", op_data["text"])
+                op_entry["text"] = data.get("op_text", op_data["text"])
 
                 final_payload = {
                     "op": op_entry,
@@ -267,7 +263,10 @@ def api_render_stream(req: RenderRequest):
             if not bg_video:
                 raise Exception("No video files found in assets/. Add at least one .mp4 file.")
 
-            playlist = req.playlist
+            from llm import censor_playlist
+            q.put({"type": "progress", "status": "Censoring script...", "progress": 3})
+            playlist = censor_playlist(req.playlist)
+            
             if not playlist:
                 raise Exception("Playlist is empty.")
                 
@@ -284,8 +283,9 @@ def api_render_stream(req: RenderRequest):
             import re
             ss_playlist = []
             for post in playlist:
-                # Strip specific XML tags before screenshotting
-                clean_text = re.sub(r'(</?censor>|<pause=[0-9.]+s>)', '', post['text'])
+                # Strip specific XML tags before screenshotting, replacing profanity with asterisks
+                clean_text = re.sub(r'<censor>.*?</censor>', '***', post['text'])
+                clean_text = re.sub(r'<pause=[0-9.]+s>', '', clean_text)
                 ss_playlist.append({"id": post['id'], "text": clean_text, "hide_image": post.get("hide_image", False)})
 
             screenshot_results = capture_posts_batch(
